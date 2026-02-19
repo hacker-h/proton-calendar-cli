@@ -28,6 +28,19 @@ test("requires bearer auth for calendar endpoints", async () => {
   }
 });
 
+test("reports upstream auth status", async () => {
+  const setup = await createFixture();
+  try {
+    const response = await apiRequest(setup, "GET", "/v1/auth/status");
+    assert.equal(response.status, 200);
+    assert.equal(response.body.data.authenticated, true);
+    assert.equal(response.body.data.targetCalendarId, setup.proton.calendarId);
+    assert.equal(response.body.data.session.cookieCount > 0, true);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports create/list/get/update/delete event lifecycle", async () => {
   const setup = await createFixture();
   try {
@@ -123,6 +136,21 @@ test("supports range filtering and pagination", async () => {
   }
 });
 
+test("returns 404 for missing events", async () => {
+  const setup = await createFixture();
+  try {
+    const getMissing = await apiRequest(setup, "GET", "/v1/events/missing-event");
+    assert.equal(getMissing.status, 404);
+    assert.equal(getMissing.body.error.code, "NOT_FOUND");
+
+    const deleteMissing = await apiRequest(setup, "DELETE", "/v1/events/missing-event");
+    assert.equal(deleteMissing.status, 404);
+    assert.equal(deleteMissing.body.error.code, "NOT_FOUND");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("validates request constraints for single-instance events", async () => {
   const setup = await createFixture();
   try {
@@ -160,6 +188,32 @@ test("enforces target calendar and does not allow override", async () => {
     });
     assert.equal(response.status, 400);
     assert.equal(response.body.error.code, "CALENDAR_SCOPE_VIOLATION");
+  } finally {
+    await setup.close();
+  }
+});
+
+test("validates update payloads", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Patch me",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T11:00:00.000Z",
+      timezone: "UTC",
+    });
+
+    const eventId = created.body.data.id;
+    const emptyPatch = await apiRequest(setup, "PATCH", `/v1/events/${eventId}`, {});
+    assert.equal(emptyPatch.status, 400);
+    assert.equal(emptyPatch.body.error.code, "EMPTY_PATCH");
+
+    const badRangePatch = await apiRequest(setup, "PATCH", `/v1/events/${eventId}`, {
+      start: "2026-03-10T12:00:00.000Z",
+      end: "2026-03-10T10:00:00.000Z",
+    });
+    assert.equal(badRangePatch.status, 400);
+    assert.equal(badRangePatch.body.error.code, "INVALID_TIME_RANGE");
   } finally {
     await setup.close();
   }
