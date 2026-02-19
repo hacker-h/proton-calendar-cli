@@ -5,6 +5,7 @@
   "type": "module",
   "scripts": {
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
+    "start": "node src/index.js",
     "test": "node --test \"test/**/*.test.js\""
   },
   "devDependencies": {
