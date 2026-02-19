@@ -1,0 +1,13 @@
+{
+  "name": "proton-calendar-api",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
+    "test": "node --test \"test/**/*.test.js\""
+  },
+  "devDependencies": {
+    "sweetlink": "^0.2.0"
+  }
+}
