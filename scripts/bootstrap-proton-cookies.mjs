@@ -7,6 +7,7 @@ import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import {
   DEFAULT_PROTON_DOMAINS,
+  countAuthCookies,
   fetchDevtoolsTargets,
   fileExists,
   findAvailablePort,
@@ -26,8 +27,6 @@ async function main() {
       "Chrome not found. Set --chrome-path or CHROME_PATH to your Chrome executable path."
     );
   }
-
-  await assertSweetLinkInstalled();
 
   const profileDir = options.profileDir || (await mkdtemp(path.join(os.tmpdir(), "proton-cookie-profile-")));
   await mkdir(profileDir, { recursive: true });
@@ -53,17 +52,30 @@ async function main() {
     while (Date.now() - startedAt < timeoutMs) {
       let cookiesByDomain = {};
       try {
-        cookiesByDomain = await exportCookiesWithSweetLink(profileDir, DEFAULT_PROTON_DOMAINS);
+        cookiesByDomain = await exportCookiesWithDevTools(devtoolsPort, DEFAULT_PROTON_DOMAINS);
         warnedExportFailure = false;
-      } catch (error) {
-        if (!warnedExportFailure) {
-          console.log("Waiting for cookie export access (check keychain/system prompts)...");
-          warnedExportFailure = true;
+      } catch {
+        try {
+          cookiesByDomain = await exportCookiesWithSweetLink(profileDir, DEFAULT_PROTON_DOMAINS);
+          warnedExportFailure = false;
+        } catch {
+          if (!warnedExportFailure) {
+            console.log("Waiting for cookie export access (check keychain/system prompts)...");
+            warnedExportFailure = true;
+          }
         }
       }
-      const targets = await fetchDevtoolsTargets(devtoolsPort).catch(() => []);
 
-      if (looksAuthenticated(cookiesByDomain, targets)) {
+      const authCookieCount = countAuthCookies(cookiesByDomain);
+      const uidCandidates = extractUidCandidates(cookiesByDomain);
+      if (authCookieCount > 0 && warnedExportFailure) {
+        warnedExportFailure = false;
+      }
+
+      const targets = await fetchDevtoolsTargets(devtoolsPort).catch(() => []);
+      const readyByCookiesOnly = authCookieCount >= 2 && uidCandidates.length > 0;
+
+      if (readyByCookiesOnly || looksAuthenticated(cookiesByDomain, targets)) {
         const payload = {
           exportedAt: new Date().toISOString(),
           source: "sweetlink",
@@ -71,6 +83,7 @@ async function main() {
           domains: DEFAULT_PROTON_DOMAINS,
           cookiesByDomain,
           cookies: flattenCookies(cookiesByDomain),
+          uidCandidates,
         };
 
         await mkdir(path.dirname(outputFile), { recursive: true });
@@ -224,6 +237,51 @@ async function exportCookiesWithSweetLink(profileDir, domains) {
   return parsed && typeof parsed === "object" ? parsed : {};
 }
 
+async function exportCookiesWithDevTools(devtoolsPort, domains) {
+  if (typeof WebSocket !== "function") {
+    throw new Error("WebSocket is not available in this Node runtime");
+  }
+
+  const websocketUrl = await openDevToolsTarget(devtoolsPort, "https://calendar.proton.me/u/0");
+  if (!websocketUrl) {
+    throw new Error("No DevTools websocket target available");
+  }
+
+  const client = await createCdpClient(websocketUrl);
+  try {
+    await client.send("Network.enable");
+    const result = await client.send("Network.getAllCookies");
+    const allCookies = Array.isArray(result?.cookies) ? result.cookies : [];
+
+    const normalized = allCookies
+      .map((cookie) => normalizeDevToolsCookie(cookie))
+      .filter((cookie) => cookie && typeof cookie.domain === "string");
+
+    const grouped = {};
+    for (const domain of domains) {
+      const key = String(domain).trim().toLowerCase();
+      const seen = new Set();
+      grouped[key] = [];
+
+      for (const cookie of normalized) {
+        if (!cookieMatchesDomain(cookie.domain, key)) {
+          continue;
+        }
+        const dedupeKey = `${cookie.domain}|${cookie.path}|${cookie.name}`;
+        if (seen.has(dedupeKey)) {
+          continue;
+        }
+        seen.add(dedupeKey);
+        grouped[key].push(cookie);
+      }
+    }
+
+    return grouped;
+  } finally {
+    await client.close();
+  }
+}
+
 async function resolveSweetLinkProfilePath(profileDir) {
   const defaultProfile = path.join(profileDir, "Default");
   const defaultCookiesDb = path.join(defaultProfile, "Cookies");
@@ -231,12 +289,6 @@ async function resolveSweetLinkProfilePath(profileDir) {
     return defaultProfile;
   }
   return profileDir;
-}
-
-async function assertSweetLinkInstalled() {
-  await runCommand("pnpm", ["exec", "sweetlink", "--version"], process.env).catch((err) => {
-    throw new Error(`SweetLink is required. Run \`pnpm install\` first.\n${err.message}`);
-  });
 }
 
 function runCommand(command, args, env, options = {}) {
@@ -279,6 +331,159 @@ function runCommand(command, args, env, options = {}) {
       reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
     });
   });
+}
+
+async function openDevToolsTarget(devtoolsPort, urlToOpen) {
+  const encoded = encodeURIComponent(urlToOpen);
+
+  const created = await fetch(`http://127.0.0.1:${devtoolsPort}/json/new?${encoded}`, {
+    method: "PUT",
+  }).catch(() => null);
+
+  if (created?.ok) {
+    const payload = await created.json().catch(() => null);
+    if (payload?.webSocketDebuggerUrl) {
+      return payload.webSocketDebuggerUrl;
+    }
+  }
+
+  const listed = await fetch(`http://127.0.0.1:${devtoolsPort}/json/list`).catch(() => null);
+  if (!listed?.ok) {
+    return null;
+  }
+
+  const tabs = await listed.json().catch(() => []);
+  if (!Array.isArray(tabs)) {
+    return null;
+  }
+
+  for (const tab of tabs) {
+    if (tab?.webSocketDebuggerUrl) {
+      return tab.webSocketDebuggerUrl;
+    }
+  }
+
+  return null;
+}
+
+async function createCdpClient(websocketUrl) {
+  const ws = new WebSocket(websocketUrl);
+  await new Promise((resolve, reject) => {
+    ws.addEventListener("open", () => resolve());
+    ws.addEventListener("error", (event) => reject(event.error || new Error("WebSocket error")));
+  });
+
+  let requestId = 0;
+  const pending = new Map();
+  ws.addEventListener("message", (event) => {
+    let payload;
+    try {
+      payload = JSON.parse(String(event.data));
+    } catch {
+      return;
+    }
+    if (!payload?.id || !pending.has(payload.id)) {
+      return;
+    }
+
+    const wait = pending.get(payload.id);
+    pending.delete(payload.id);
+
+    if (payload.error) {
+      wait.reject(new Error(`CDP ${wait.method} failed: ${JSON.stringify(payload.error)}`));
+      return;
+    }
+    wait.resolve(payload.result);
+  });
+
+  return {
+    send(method, params = {}) {
+      return new Promise((resolve, reject) => {
+        requestId += 1;
+        pending.set(requestId, { resolve, reject, method });
+        ws.send(JSON.stringify({ id: requestId, method, params }));
+      });
+    },
+    close() {
+      return new Promise((resolve) => {
+        if (ws.readyState === ws.CLOSED) {
+          resolve();
+          return;
+        }
+        ws.addEventListener("close", () => resolve(), { once: true });
+        ws.close();
+      });
+    },
+  };
+}
+
+function normalizeDevToolsCookie(cookie) {
+  if (!cookie || typeof cookie !== "object") {
+    return null;
+  }
+  if (typeof cookie.name !== "string" || typeof cookie.value !== "string") {
+    return null;
+  }
+
+  const domain = String(cookie.domain || "").trim();
+  if (!domain) {
+    return null;
+  }
+
+  const sameSite =
+    cookie.sameSite === "Strict" || cookie.sameSite === "Lax" || cookie.sameSite === "None"
+      ? cookie.sameSite
+      : undefined;
+
+  const expires =
+    typeof cookie.expires === "number" && Number.isFinite(cookie.expires) && cookie.expires > 0
+      ? Math.floor(cookie.expires)
+      : undefined;
+
+  return {
+    name: cookie.name,
+    value: cookie.value,
+    domain,
+    path: typeof cookie.path === "string" && cookie.path.length > 0 ? cookie.path : "/",
+    secure: Boolean(cookie.secure),
+    httpOnly: Boolean(cookie.httpOnly),
+    sameSite,
+    expires,
+  };
+}
+
+function cookieMatchesDomain(cookieDomain, requestedDomain) {
+  const normalizedCookieDomain = String(cookieDomain || "").trim().replace(/^\./, "").toLowerCase();
+  const normalizedRequested = String(requestedDomain || "").trim().replace(/^\./, "").toLowerCase();
+  if (!normalizedCookieDomain || !normalizedRequested) {
+    return false;
+  }
+  return (
+    normalizedCookieDomain === normalizedRequested ||
+    normalizedRequested.endsWith(`.${normalizedCookieDomain}`) ||
+    normalizedCookieDomain.endsWith(`.${normalizedRequested}`)
+  );
+}
+
+function extractUidCandidates(cookiesByDomain) {
+  const uids = new Set();
+  for (const cookies of Object.values(cookiesByDomain || {})) {
+    if (!Array.isArray(cookies)) {
+      continue;
+    }
+    for (const cookie of cookies) {
+      if (typeof cookie?.name !== "string") {
+        continue;
+      }
+      if (cookie.name.startsWith("AUTH-")) {
+        uids.add(cookie.name.slice("AUTH-".length));
+      }
+      if (cookie.name.startsWith("REFRESH-")) {
+        uids.add(cookie.name.slice("REFRESH-".length));
+      }
+    }
+  }
+  return [...uids];
 }
 
 async function shutdownChrome(child) {
