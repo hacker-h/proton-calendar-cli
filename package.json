@@ -10,5 +10,8 @@
   },
   "devDependencies": {
     "sweetlink": "^0.2.0"
+  },
+  "dependencies": {
+    "@steipete/sweet-cookie": "^0.1.0"
   }
 }

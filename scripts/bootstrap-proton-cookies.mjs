@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { getCookies } from "@steipete/sweet-cookie";
 import {
   DEFAULT_PROTON_DOMAINS,
   countAuthCookies,
@@ -51,18 +52,16 @@ async function main() {
 
     while (Date.now() - startedAt < timeoutMs) {
       let cookiesByDomain = {};
+      let extractor = "";
       try {
-        cookiesByDomain = await exportCookiesWithDevTools(devtoolsPort, DEFAULT_PROTON_DOMAINS);
+        const exported = await exportCookies(profileDir, devtoolsPort, DEFAULT_PROTON_DOMAINS);
+        cookiesByDomain = exported.cookiesByDomain;
+        extractor = exported.extractor;
         warnedExportFailure = false;
       } catch {
-        try {
-          cookiesByDomain = await exportCookiesWithSweetLink(profileDir, DEFAULT_PROTON_DOMAINS);
-          warnedExportFailure = false;
-        } catch {
-          if (!warnedExportFailure) {
-            console.log("Waiting for cookie export access (check keychain/system prompts)...");
-            warnedExportFailure = true;
-          }
+        if (!warnedExportFailure) {
+          console.log("Waiting for cookie export access (check keychain/system prompts)...");
+          warnedExportFailure = true;
         }
       }
 
@@ -78,7 +77,7 @@ async function main() {
       if (readyByCookiesOnly || looksAuthenticated(cookiesByDomain, targets)) {
         const payload = {
           exportedAt: new Date().toISOString(),
-          source: "sweetlink",
+          source: extractor || "unknown",
           loginUrl,
           domains: DEFAULT_PROTON_DOMAINS,
           cookiesByDomain,
@@ -235,6 +234,78 @@ async function exportCookiesWithSweetLink(profileDir, domains) {
   const result = await runCommand("pnpm", args, env, { timeoutMs: 15000 });
   const parsed = JSON.parse(result.stdout || "{}");
   return parsed && typeof parsed === "object" ? parsed : {};
+}
+
+async function exportCookies(profileDir, devtoolsPort, domains) {
+  try {
+    return {
+      extractor: "sweet-cookie",
+      cookiesByDomain: await exportCookiesWithSweetCookie(profileDir, domains),
+    };
+  } catch {
+    // continue fallback chain
+  }
+
+  try {
+    return {
+      extractor: "devtools",
+      cookiesByDomain: await exportCookiesWithDevTools(devtoolsPort, domains),
+    };
+  } catch {
+    // continue fallback chain
+  }
+
+  return {
+    extractor: "sweetlink",
+    cookiesByDomain: await exportCookiesWithSweetLink(profileDir, domains),
+  };
+}
+
+async function exportCookiesWithSweetCookie(profileDir, domains) {
+  const chromeProfilePath = await resolveSweetLinkProfilePath(profileDir);
+  const keychainPassword = await readChromeSafeStoragePassword();
+  if (keychainPassword) {
+    process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD = keychainPassword;
+  }
+
+  const grouped = {};
+  for (const domain of domains) {
+    const key = String(domain).trim().toLowerCase();
+    const seen = new Set();
+
+    const sweet = await getCookies({
+      url: `https://${key}/api/auth/refresh`,
+      browsers: ["chrome"],
+      chromeProfile: chromeProfilePath,
+      mode: "first",
+      timeoutMs: 3000,
+      includeExpired: false,
+    });
+
+    grouped[key] = [];
+    for (const cookie of sweet.cookies || []) {
+      if (!cookieMatchesDomain(cookie.domain, key)) {
+        continue;
+      }
+      const normalized = normalizeSweetCookie(cookie);
+      if (!normalized) {
+        continue;
+      }
+      const dedupeKey = `${normalized.domain}|${normalized.path}|${normalized.name}`;
+      if (seen.has(dedupeKey)) {
+        continue;
+      }
+      seen.add(dedupeKey);
+      grouped[key].push(normalized);
+    }
+  }
+
+  const totalCookies = Object.values(grouped).reduce((sum, item) => sum + item.length, 0);
+  if (totalCookies === 0) {
+    throw new Error("sweet-cookie returned no cookies for Proton domains");
+  }
+
+  return grouped;
 }
 
 async function exportCookiesWithDevTools(devtoolsPort, domains) {
@@ -452,6 +523,37 @@ function normalizeDevToolsCookie(cookie) {
   };
 }
 
+function normalizeSweetCookie(cookie) {
+  if (!cookie || typeof cookie !== "object") {
+    return null;
+  }
+  if (typeof cookie.name !== "string" || typeof cookie.value !== "string") {
+    return null;
+  }
+
+  const domain = String(cookie.domain || "").trim();
+  if (!domain) {
+    return null;
+  }
+
+  return {
+    name: cookie.name,
+    value: cookie.value,
+    domain,
+    path: typeof cookie.path === "string" && cookie.path.length > 0 ? cookie.path : "/",
+    secure: Boolean(cookie.secure),
+    httpOnly: Boolean(cookie.httpOnly),
+    sameSite:
+      cookie.sameSite === "Strict" || cookie.sameSite === "Lax" || cookie.sameSite === "None"
+        ? cookie.sameSite
+        : undefined,
+    expires:
+      typeof cookie.expires === "number" && Number.isFinite(cookie.expires) && cookie.expires > 0
+        ? Math.floor(cookie.expires)
+        : undefined,
+  };
+}
+
 function cookieMatchesDomain(cookieDomain, requestedDomain) {
   const normalizedCookieDomain = String(cookieDomain || "").trim().replace(/^\./, "").toLowerCase();
   const normalizedRequested = String(requestedDomain || "").trim().replace(/^\./, "").toLowerCase();
@@ -484,6 +586,33 @@ function extractUidCandidates(cookiesByDomain) {
     }
   }
   return [...uids];
+}
+
+async function readChromeSafeStoragePassword() {
+  if (process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD) {
+    return process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD;
+  }
+
+  if (process.platform !== "darwin") {
+    return "";
+  }
+
+  try {
+    const result = await runCommand(
+      "security",
+      ["find-generic-password", "-w", "-s", "Chrome Safe Storage"],
+      process.env,
+      { timeoutMs: 2000 }
+    );
+    const password = result.stdout.trim();
+    if (!password) {
+      return "";
+    }
+    process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD = password;
+    return password;
+  } catch {
+    return "";
+  }
 }
 
 async function shutdownChrome(child) {

@@ -7,6 +7,10 @@ settings:
 importers:
 
   .:
+    dependencies:
+      '@steipete/sweet-cookie':
+        specifier: ^0.1.0
+        version: 0.1.0
     devDependencies:
       sweetlink:
         specifier: ^0.2.0
@@ -40,6 +44,10 @@ packages:
     resolution: {integrity: sha512-46BZJYJjc/WwmKjsvDFykHtXrtomsCIrwYQPOP7VfMJoZY2bsDF9oROBABR3paDjDcmkUye1Pb1BqdcdiipaWA==}
     engines: {node: '>=18'}
     hasBin: true
+
+  '@steipete/sweet-cookie@0.1.0':
+    resolution: {integrity: sha512-cF8hS6rTohAFI1NAm2/HM9omBlw6V1DpwF6q5e9FB+l274HjtyirCgCc6QK2Rtuh7uDoqWHshFQZPsceyJuVgw==}
+    engines: {node: '>=22'}
 
   '@tootallnate/once@1.1.2':
     resolution: {integrity: sha512-RbzJvlNzmRq5c3O09UipeuXno4tA1FE6ikOjxZK0tuxVv3412l64l5t1W5pj4+rJq9vpkm/kwiR07aZXnsKPxw==}
@@ -945,6 +953,8 @@ snapshots:
       - bare-buffer
       - react-native-b4a
       - supports-color
+
+  '@steipete/sweet-cookie@0.1.0': {}
 
   '@tootallnate/once@1.1.2':
     optional: true

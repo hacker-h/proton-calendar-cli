@@ -10,7 +10,7 @@ This repo now includes a basic bootstrap flow that:
 
 1. opens a dedicated Chrome window for manual Proton login,
 2. detects when Proton Calendar is loaded and auth cookies are present,
-3. exports cookies via SweetLink,
+3. exports cookies via `@steipete/sweet-cookie` (with DevTools/SweetLink fallback),
 4. closes the browser, and
 5. writes the cookie bundle to `secrets/proton-cookies.json`.
 
@@ -22,6 +22,8 @@ pnpm install
 ```
 
 `sweetlink` needs native sqlite/keytar bindings to read Chrome cookies. If setup fails, rerun `pnpm approve-builds` and reinstall.
+
+If keychain prompts block extraction, the bootstrap script will automatically try to read `Chrome Safe Storage` and pass it to `sweet-cookie`.
 
 ### Run
 
