@@ -3,8 +3,12 @@
   "version": "0.1.0",
   "private": true,
   "type": "module",
+  "bin": {
+    "pc": "src/cli.js"
+  },
   "scripts": {
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
+    "pc": "node src/cli.js",
     "start": "node src/index.js",
     "test": "node --test \"test/**/*.test.js\""
   },
@@ -12,6 +16,7 @@
     "sweetlink": "^0.2.0"
   },
   "dependencies": {
-    "@steipete/sweet-cookie": "^0.1.0"
+    "@steipete/sweet-cookie": "^0.1.0",
+    "openpgp": "^6.3.0"
   }
 }

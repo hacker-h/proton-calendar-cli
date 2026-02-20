@@ -18,12 +18,15 @@ export function createApiServer(config, options = {}) {
       sessionStore,
       timeoutMs: config.protonTimeoutMs,
       maxRetries: config.protonMaxRetries,
+      debugAuth: config.protonAuthDebug,
       fetchImpl: options.fetchImpl,
     });
   const service =
     options.service ||
     new CalendarService({
       targetCalendarId: config.targetCalendarId,
+      defaultCalendarId: config.defaultCalendarId,
+      allowedCalendarIds: config.allowedCalendarIds,
       protonClient,
       sessionStore,
     });
@@ -58,7 +61,9 @@ export function createApiServer(config, options = {}) {
         return;
       }
 
-      if (method === "GET" && url.pathname === "/v1/events") {
+      const route = parseEventRoute(url.pathname);
+
+      if (route?.kind === "collection" && method === "GET") {
         send(
           200,
           {
@@ -67,45 +72,60 @@ export function createApiServer(config, options = {}) {
               end: url.searchParams.get("end"),
               limit: url.searchParams.get("limit"),
               cursor: url.searchParams.get("cursor"),
+            }, {
+              calendarId: route.calendarId,
             }),
           }
         );
         return;
       }
 
-      const eventId = extractEventId(url.pathname);
-      if (eventId && method === "GET") {
-        send(200, { data: await service.getEvent(eventId) });
+      if (route?.kind === "event" && method === "GET") {
+        send(200, {
+          data: await service.getEvent(route.eventId, {
+            calendarId: route.calendarId,
+          }),
+        });
         return;
       }
 
-      if (method === "POST" && url.pathname === "/v1/events") {
+      if (route?.kind === "collection" && method === "POST") {
         const body = await readJsonBody(req);
         send(
           201,
           {
-            data: await service.createEvent(body, req.headers["x-idempotency-key"]),
+            data: await service.createEvent(body, req.headers["x-idempotency-key"], {
+              calendarId: route.calendarId,
+            }),
           }
         );
         return;
       }
 
-      if (eventId && method === "PATCH") {
+      if (route?.kind === "event" && method === "PATCH") {
         const body = await readJsonBody(req);
         send(
           200,
           {
-            data: await service.updateEvent(eventId, body, req.headers["x-idempotency-key"]),
+            data: await service.updateEvent(route.eventId, body, req.headers["x-idempotency-key"], {
+              calendarId: route.calendarId,
+              scope: url.searchParams.get("scope"),
+              occurrenceStart: url.searchParams.get("occurrenceStart"),
+            }),
           }
         );
         return;
       }
 
-      if (eventId && method === "DELETE") {
+      if (route?.kind === "event" && method === "DELETE") {
         send(
           200,
           {
-            data: await service.deleteEvent(eventId, req.headers["x-idempotency-key"]),
+            data: await service.deleteEvent(route.eventId, req.headers["x-idempotency-key"], {
+              calendarId: route.calendarId,
+              scope: url.searchParams.get("scope"),
+              occurrenceStart: url.searchParams.get("occurrenceStart"),
+            }),
           }
         );
         return;
@@ -175,11 +195,39 @@ function assertAuthorized(req, expectedToken) {
   }
 }
 
-function extractEventId(pathname) {
+function parseEventRoute(pathname) {
   const parts = pathname.split("/").filter(Boolean);
-  if (parts.length === 3 && parts[0] === "v1" && parts[1] === "events") {
-    return decodeURIComponent(parts[2]);
+
+  if (parts.length === 2 && parts[0] === "v1" && parts[1] === "events") {
+    return {
+      kind: "collection",
+      calendarId: null,
+    };
   }
+
+  if (parts.length === 3 && parts[0] === "v1" && parts[1] === "events") {
+    return {
+      kind: "event",
+      calendarId: null,
+      eventId: decodeURIComponent(parts[2]),
+    };
+  }
+
+  if (parts.length === 4 && parts[0] === "v1" && parts[1] === "calendars" && parts[3] === "events") {
+    return {
+      kind: "collection",
+      calendarId: decodeURIComponent(parts[2]),
+    };
+  }
+
+  if (parts.length === 5 && parts[0] === "v1" && parts[1] === "calendars" && parts[3] === "events") {
+    return {
+      kind: "event",
+      calendarId: decodeURIComponent(parts[2]),
+      eventId: decodeURIComponent(parts[4]),
+    };
+  }
+
   return null;
 }
 

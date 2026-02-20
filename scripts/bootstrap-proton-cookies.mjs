@@ -73,8 +73,16 @@ async function main() {
 
       const targets = await fetchDevtoolsTargets(devtoolsPort).catch(() => []);
       const readyByCookiesOnly = authCookieCount >= 2 && uidCandidates.length > 0;
+      const likelyAuthenticated = readyByCookiesOnly || looksAuthenticated(cookiesByDomain, targets);
 
-      if (readyByCookiesOnly || looksAuthenticated(cookiesByDomain, targets)) {
+      if (likelyAuthenticated) {
+        const authProbe = await verifyCalendarApiSession(cookiesByDomain, uidCandidates).catch(() => null);
+        if (!authProbe) {
+          await delay(options.pollSeconds * 1000);
+          continue;
+        }
+
+        const persistedSessions = await exportPersistedSessionsWithDevTools(devtoolsPort).catch(() => ({}));
         const payload = {
           exportedAt: new Date().toISOString(),
           source: extractor || "unknown",
@@ -83,6 +91,8 @@ async function main() {
           cookiesByDomain,
           cookies: flattenCookies(cookiesByDomain),
           uidCandidates,
+          persistedSessions,
+          authProbe,
         };
 
         await mkdir(path.dirname(outputFile), { recursive: true });
@@ -353,6 +363,104 @@ async function exportCookiesWithDevTools(devtoolsPort, domains) {
   }
 }
 
+async function exportPersistedSessionsWithDevTools(devtoolsPort) {
+  if (typeof WebSocket !== "function") {
+    return {};
+  }
+
+  const origins = ["https://calendar.proton.me/u/0", "https://account.proton.me/u/0"];
+  const websocketUrl = await openDevToolsTarget(devtoolsPort, origins[0]);
+  if (!websocketUrl) {
+    return {};
+  }
+
+  const client = await createCdpClient(websocketUrl);
+  try {
+    await client.send("Runtime.enable");
+    await client.send("Page.enable");
+
+    const sessions = {};
+    for (let attempt = 0; attempt < 6; attempt += 1) {
+      for (const origin of origins) {
+        await client.send("Page.navigate", { url: origin });
+        await delay(1200 + attempt * 250);
+
+        const result = await client.send("Runtime.evaluate", {
+          expression:
+            "JSON.stringify(Object.entries(localStorage || {}).map(([key, value]) => ({ key, value })))",
+          returnByValue: true,
+        });
+
+        const raw = result?.result?.value;
+        if (!raw || typeof raw !== "string") {
+          continue;
+        }
+
+        let entries;
+        try {
+          entries = JSON.parse(raw);
+        } catch {
+          continue;
+        }
+
+        for (const entry of Array.isArray(entries) ? entries : []) {
+          const key = String(entry?.key || "");
+          const value = entry?.value;
+          if (!key || typeof value !== "string") {
+            continue;
+          }
+
+          const maybeSession = parsePersistedSession(value);
+          if (!maybeSession) {
+            continue;
+          }
+
+          if (isPersistedSessionKey(key) || isPersistedSessionShape(maybeSession)) {
+            sessions[key] = maybeSession;
+          }
+        }
+      }
+
+      if (Object.keys(sessions).length > 0) {
+        break;
+      }
+
+      await delay(800);
+    }
+
+    return sessions;
+  } finally {
+    await client.close();
+  }
+}
+
+function parsePersistedSession(value) {
+  if (typeof value !== "string" || value.length === 0) {
+    return null;
+  }
+
+  try {
+    const parsed = JSON.parse(value);
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+      return null;
+    }
+    return parsed;
+  } catch {
+    return null;
+  }
+}
+
+function isPersistedSessionKey(key) {
+  return key.startsWith("ps-") || key.toLowerCase().includes("persist");
+}
+
+function isPersistedSessionShape(value) {
+  if (!value || typeof value !== "object") {
+    return false;
+  }
+  return typeof value.blob === "string" && value.blob.length > 0;
+}
+
 async function resolveSweetLinkProfilePath(profileDir) {
   const defaultProfile = path.join(profileDir, "Default");
   const defaultCookiesDb = path.join(defaultProfile, "Cookies");
@@ -586,6 +694,94 @@ function extractUidCandidates(cookiesByDomain) {
     }
   }
   return [...uids];
+}
+
+async function verifyCalendarApiSession(cookiesByDomain, uidCandidates) {
+  const hosts = ["https://calendar.proton.me", "https://account.proton.me"];
+
+  for (const uid of uidCandidates) {
+    for (const host of hosts) {
+      const cookieHeader = buildProbeCookieHeader(cookiesByDomain, host, uid);
+      if (!cookieHeader) {
+        continue;
+      }
+
+      const url = `${host}/api/calendar/v1`;
+      let response;
+      try {
+        response = await fetch(url, {
+          method: "GET",
+          headers: {
+            Accept: "application/vnd.protonmail.v1+json",
+            Cookie: cookieHeader,
+            "x-pm-appversion": "web-calendar@5.0.101.3",
+            "x-pm-locale": "en-US",
+            "x-pm-uid": uid,
+          },
+          signal: AbortSignal.timeout(7000),
+        });
+      } catch {
+        continue;
+      }
+
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch {
+        continue;
+      }
+
+      const calendars = Array.isArray(payload?.Calendars) ? payload.Calendars : [];
+      if (response.ok && [1000, 1001].includes(payload?.Code) && calendars.length > 0) {
+        return {
+          uid,
+          host,
+          calendarCount: calendars.length,
+        };
+      }
+    }
+  }
+
+  return null;
+}
+
+function buildProbeCookieHeader(cookiesByDomain, host, uid) {
+  const hostname = new URL(host).hostname;
+  const cookies = flattenCookies(cookiesByDomain);
+  const map = new Map();
+
+  for (const cookie of cookies) {
+    const name = String(cookie?.name || "");
+    const value = String(cookie?.value || "");
+    const domain = String(cookie?.domain || "");
+    if (!name || !value) {
+      continue;
+    }
+
+    const isHostCookie = cookieMatchesDomain(domain, hostname);
+    const isAuthCookie =
+      name === `AUTH-${uid}` ||
+      name === `REFRESH-${uid}` ||
+      name === "Session-Id" ||
+      name === "Tag" ||
+      name === "Domain" ||
+      name === "iaas";
+
+    if (!isHostCookie && !isAuthCookie) {
+      continue;
+    }
+
+    if (isHostCookie) {
+      map.set(name, value);
+      continue;
+    }
+
+    if (!map.has(name)) {
+      map.set(name, value);
+    }
+  }
+
+  return [...map.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
 async function readChromeSafeStoragePassword() {

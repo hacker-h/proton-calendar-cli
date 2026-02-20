@@ -1,10 +1,31 @@
 import { ApiError } from "../errors.js";
 
-const ALLOWED_FIELDS = new Set(["title", "description", "start", "end", "timezone", "location"]);
+const ALLOWED_FIELDS = new Set([
+  "title",
+  "description",
+  "start",
+  "end",
+  "timezone",
+  "location",
+  "recurrence",
+]);
+
+const MUTATION_SCOPES = new Set(["single", "following", "series"]);
+const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
+const VALID_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
 
 export class CalendarService {
   constructor(options) {
-    this.targetCalendarId = options.targetCalendarId;
+    this.targetCalendarId = options.targetCalendarId || null;
+    this.defaultCalendarId = options.defaultCalendarId || options.targetCalendarId || null;
+    this.allowedCalendarIds = new Set(options.allowedCalendarIds || []);
+    if (this.targetCalendarId) {
+      this.allowedCalendarIds.add(this.targetCalendarId);
+    }
+    if (this.defaultCalendarId) {
+      this.allowedCalendarIds.add(this.defaultCalendarId);
+    }
+
     this.protonClient = options.protonClient;
     this.sessionStore = options.sessionStore;
   }
@@ -16,6 +37,8 @@ export class CalendarService {
       return {
         authenticated: true,
         targetCalendarId: this.targetCalendarId,
+        defaultCalendarId: this.defaultCalendarId,
+        allowedCalendarIds: [...this.allowedCalendarIds].sort(),
         session,
         upstream,
       };
@@ -24,6 +47,8 @@ export class CalendarService {
         return {
           authenticated: false,
           targetCalendarId: this.targetCalendarId,
+          defaultCalendarId: this.defaultCalendarId,
+          allowedCalendarIds: [...this.allowedCalendarIds].sort(),
           session,
         };
       }
@@ -31,100 +56,212 @@ export class CalendarService {
     }
   }
 
-  async listEvents(input) {
+  async listEvents(input, options = {}) {
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
     const range = validateRange(input.start, input.end);
     const limit = readLimit(input.limit);
-    const cursor = readCursor(input.cursor);
+    const offset = parseCursor(input.cursor);
 
-    const result = await this.protonClient.listEvents({
-      calendarId: this.targetCalendarId,
-      start: range.start,
-      end: range.end,
-      limit,
-      cursor,
-    });
+    const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
+    const normalized = rawEvents.map(normalizeEvent);
+    const filtered = normalized.filter((event) => event.calendarId === calendarId);
+    const expanded = expandEventsInRange(filtered, range.start, range.end);
 
-    const events = Array.isArray(result?.events) ? result.events.map(normalizeEvent) : [];
-    const filtered = events.filter((event) => event.calendarId === this.targetCalendarId);
+    expanded.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const page = expanded.slice(offset, offset + limit);
+    const nextCursor = offset + limit < expanded.length ? String(offset + limit) : null;
 
     return {
-      events: filtered,
-      nextCursor: result?.nextCursor || null,
+      events: page,
+      nextCursor,
     };
   }
 
-  async getEvent(eventId) {
+  async getEvent(eventId, options = {}) {
     ensureId(eventId);
+    const parsedOccurrence = parseOccurrenceEventId(eventId);
+    const effectiveEventId = parsedOccurrence ? parsedOccurrence.eventId : eventId;
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+
     const event = normalizeEvent(
-      await this.protonClient.getEvent({ calendarId: this.targetCalendarId, eventId })
+      await this.protonClient.getEvent({
+        calendarId,
+        eventId: effectiveEventId,
+      })
     );
-    this.#assertTargetCalendar(event);
-    return event;
+
+    this.#assertExpectedCalendar(event, calendarId);
+
+    if (!parsedOccurrence) {
+      return event;
+    }
+
+    if (!event.recurrence) {
+      throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
+    }
+
+    const occurrence = materializeOccurrence(event, parsedOccurrence.occurrenceStart);
+    if (!occurrence) {
+      throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
+    }
+
+    return occurrence;
   }
 
-  async createEvent(payload, idempotencyKey) {
-    assertSingleCalendarPayload(payload, this.targetCalendarId);
+  async createEvent(payload, idempotencyKey, options = {}) {
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+    assertCalendarPayload(payload, calendarId);
     const eventInput = validateCreatePayload(payload);
 
     const created = normalizeEvent(
       await this.protonClient.createEvent({
-        calendarId: this.targetCalendarId,
+        calendarId,
         event: eventInput,
-        idempotencyKey,
+        idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
       })
     );
 
-    this.#assertTargetCalendar(created);
+    this.#assertExpectedCalendar(created, calendarId);
     return created;
   }
 
-  async updateEvent(eventId, payload, idempotencyKey) {
+  async updateEvent(eventId, payload, idempotencyKey, options = {}) {
     ensureId(eventId);
-    assertSingleCalendarPayload(payload, this.targetCalendarId);
-    const patch = validatePatchPayload(payload);
+
+    const parsedOccurrence = parseOccurrenceEventId(eventId);
+    const effectiveEventId = parsedOccurrence ? parsedOccurrence.eventId : eventId;
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+    assertCalendarPayload(payload, calendarId);
+
+    const scope = normalizeScope(options.scope, parsedOccurrence ? "single" : "series");
+    const occurrenceStart = normalizeOccurrenceStart(options.occurrenceStart || parsedOccurrence?.occurrenceStart, scope);
+    const patch = validatePatchPayload(payload, scope);
 
     const updated = normalizeEvent(
       await this.protonClient.updateEvent({
-        calendarId: this.targetCalendarId,
-        eventId,
+        calendarId,
+        eventId: effectiveEventId,
         patch,
-        idempotencyKey,
+        idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
+        scope,
+        occurrenceStart,
       })
     );
 
-    this.#assertTargetCalendar(updated);
+    this.#assertExpectedCalendar(updated, calendarId);
     return updated;
   }
 
-  async deleteEvent(eventId, idempotencyKey) {
+  async deleteEvent(eventId, idempotencyKey, options = {}) {
     ensureId(eventId);
+
+    const parsedOccurrence = parseOccurrenceEventId(eventId);
+    const effectiveEventId = parsedOccurrence ? parsedOccurrence.eventId : eventId;
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+
+    const scope = normalizeScope(options.scope, parsedOccurrence ? "single" : "series");
+    const occurrenceStart = normalizeOccurrenceStart(options.occurrenceStart || parsedOccurrence?.occurrenceStart, scope);
+
     await this.protonClient.deleteEvent({
-      calendarId: this.targetCalendarId,
-      eventId,
-      idempotencyKey,
+      calendarId,
+      eventId: effectiveEventId,
+      idempotencyKey: normalizeIdempotencyKey(idempotencyKey),
+      scope,
+      occurrenceStart,
     });
-    return { deleted: true, eventId };
+
+    return {
+      deleted: true,
+      eventId,
+      scope,
+      occurrenceStart,
+    };
   }
 
-  #assertTargetCalendar(event) {
-    if (event.calendarId !== this.targetCalendarId) {
-      throw new ApiError(502, "CALENDAR_SCOPE_VIOLATION", "Upstream returned data outside target calendar", {
-        expected: this.targetCalendarId,
+  async #fetchAllEventsInRange(calendarId, range) {
+    const rows = [];
+    let cursor = null;
+    let pages = 0;
+
+    while (pages < 50) {
+      const response = await this.protonClient.listEvents({
+        calendarId,
+        start: range.start,
+        end: range.end,
+        limit: 200,
+        cursor,
+      });
+
+      const events = Array.isArray(response?.events) ? response.events : [];
+      rows.push(...events);
+
+      const next = response?.nextCursor || null;
+      if (!next) {
+        break;
+      }
+      cursor = String(next);
+      pages += 1;
+    }
+
+    return rows;
+  }
+
+  #resolveCalendarId(calendarId, options = {}) {
+    if (calendarId !== undefined && calendarId !== null && typeof calendarId !== "string") {
+      throw new ApiError(400, "INVALID_PAYLOAD", "calendarId must be a string");
+    }
+
+    const requested = typeof calendarId === "string" ? calendarId.trim() : "";
+
+    if (this.targetCalendarId) {
+      if (requested && requested !== this.targetCalendarId) {
+        throw new ApiError(400, "CALENDAR_SCOPE_VIOLATION", "calendarId cannot override target calendar");
+      }
+      return this.targetCalendarId;
+    }
+
+    if (requested) {
+      this.#assertAllowedCalendar(requested);
+      return requested;
+    }
+
+    if (options.allowDefault !== false && this.defaultCalendarId) {
+      this.#assertAllowedCalendar(this.defaultCalendarId);
+      return this.defaultCalendarId;
+    }
+
+    if (options.allowDefault !== false && this.allowedCalendarIds.size === 1) {
+      const [single] = this.allowedCalendarIds;
+      return single;
+    }
+
+    throw new ApiError(400, "CALENDAR_ID_REQUIRED", "calendarId is required for this request");
+  }
+
+  #assertAllowedCalendar(calendarId) {
+    if (this.allowedCalendarIds.size > 0 && !this.allowedCalendarIds.has(calendarId)) {
+      throw new ApiError(403, "CALENDAR_NOT_ALLOWED", "calendarId is not allowed", {
+        calendarId,
+      });
+    }
+  }
+
+  #assertExpectedCalendar(event, expectedCalendarId) {
+    if (event.calendarId !== expectedCalendarId) {
+      throw new ApiError(502, "CALENDAR_SCOPE_VIOLATION", "Upstream returned data outside selected calendar", {
+        expected: expectedCalendarId,
         received: event.calendarId,
       });
     }
   }
 }
 
-function assertSingleCalendarPayload(payload, targetCalendarId) {
+function assertCalendarPayload(payload, resolvedCalendarId) {
   if (payload && payload.calendarId !== undefined && typeof payload.calendarId !== "string") {
     throw new ApiError(400, "INVALID_PAYLOAD", "calendarId must be a string when provided");
   }
-  if (payload?.calendarId && payload.calendarId !== targetCalendarId) {
-    throw new ApiError(400, "CALENDAR_SCOPE_VIOLATION", "calendarId cannot be overridden");
-  }
-  if (payload?.recurrence !== undefined || payload?.rrule !== undefined) {
-    throw new ApiError(400, "SINGLE_INSTANCE_ONLY", "Recurring events are not supported");
+  if (payload?.calendarId && payload.calendarId !== resolvedCalendarId) {
+    throw new ApiError(400, "CALENDAR_SCOPE_VIOLATION", "calendarId cannot override route or target calendar");
   }
 }
 
@@ -149,10 +286,11 @@ function validateCreatePayload(payload) {
     end,
     timezone,
     location: optionalString(payload.location, "location", 0, 400),
+    recurrence: payload.recurrence === undefined ? null : validateRecurrence(payload.recurrence),
   };
 }
 
-function validatePatchPayload(payload) {
+function validatePatchPayload(payload, scope) {
   if (!payload || typeof payload !== "object") {
     throw new ApiError(400, "INVALID_PAYLOAD", "Request body must be a JSON object");
   }
@@ -186,6 +324,13 @@ function validatePatchPayload(payload) {
       patch[key] = optionalString(value, key, 0, 400);
       continue;
     }
+    if (key === "recurrence") {
+      if (scope === "single") {
+        throw new ApiError(400, "INVALID_SCOPE", "recurrence cannot be changed for scope=single");
+      }
+      patch.recurrence = value === null ? null : validateRecurrence(value);
+      continue;
+    }
   }
 
   if (Object.keys(patch).length === 0) {
@@ -199,10 +344,63 @@ function validatePatchPayload(payload) {
   return patch;
 }
 
+function validateRecurrence(raw) {
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence must be an object");
+  }
+
+  const freq = requireString(raw.freq, "recurrence.freq", 2, 10).toUpperCase();
+  if (!VALID_FREQ.has(freq)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.freq must be DAILY, WEEKLY, MONTHLY, or YEARLY");
+  }
+
+  const interval = readPositiveInt(raw.interval, "recurrence.interval", 1);
+  const count = raw.count === undefined || raw.count === null ? null : readPositiveInt(raw.count, "recurrence.count", null);
+  const until = raw.until === undefined || raw.until === null ? null : requireDate(raw.until, "recurrence.until");
+
+  if (count !== null && until !== null) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.count and recurrence.until cannot both be set");
+  }
+
+  const byDay = normalizeByDay(raw.byDay);
+  const byMonthDay = normalizeByMonthDay(raw.byMonthDay);
+  const weekStart = raw.weekStart === undefined || raw.weekStart === null ? null : normalizeWeekday(raw.weekStart, "recurrence.weekStart");
+  const exDates = normalizeExDates(raw.exDates);
+
+  if (freq !== "WEEKLY" && byDay.length > 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY frequency");
+  }
+
+  if (freq !== "MONTHLY" && byMonthDay.length > 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byMonthDay is only supported for MONTHLY frequency");
+  }
+
+  return {
+    freq,
+    interval,
+    count,
+    until,
+    byDay,
+    byMonthDay,
+    weekStart,
+    exDates,
+  };
+}
+
 function normalizeEvent(event) {
   if (!event || typeof event !== "object") {
     throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream event payload is invalid");
   }
+
+  let recurrence = null;
+  try {
+    recurrence = normalizeIncomingRecurrence(event.recurrence ?? event.rrule ?? null);
+  } catch {
+    throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream recurrence payload is invalid");
+  }
+
+  const occurrenceStart = event.occurrenceStart || event.recurrenceId || null;
+  const seriesId = event.seriesId || event.series_id || event.parentId || null;
 
   const normalized = {
     id: String(event.id || event.eventId || event.uid || ""),
@@ -213,6 +411,10 @@ function normalizeEvent(event) {
     end: String(event.end || event.endAt || event.end_time || ""),
     timezone: String(event.timezone || event.tz || "UTC"),
     location: event.location ? String(event.location) : "",
+    recurrence,
+    seriesId: seriesId ? String(seriesId) : null,
+    occurrenceStart: occurrenceStart ? requireDate(occurrenceStart, "occurrenceStart") : null,
+    isRecurring: Boolean(recurrence || seriesId || occurrenceStart),
     createdAt: event.createdAt || event.created_at || null,
     updatedAt: event.updatedAt || event.updated_at || null,
   };
@@ -221,7 +423,339 @@ function normalizeEvent(event) {
     throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream event payload missing required fields");
   }
 
+  if (Date.parse(normalized.end) <= Date.parse(normalized.start)) {
+    throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream event payload has invalid time range");
+  }
+
   return normalized;
+}
+
+function normalizeIncomingRecurrence(value) {
+  if (value === undefined || value === null || value === "") {
+    return null;
+  }
+
+  if (typeof value === "string") {
+    return parseRRule(value);
+  }
+
+  if (typeof value !== "object" || Array.isArray(value)) {
+    throw new Error("invalid recurrence");
+  }
+
+  const normalized = validateRecurrence(value);
+  return {
+    ...normalized,
+    exDates: normalizeExDates(value.exDates),
+  };
+}
+
+function normalizeScope(scopeRaw, fallback) {
+  if (scopeRaw === undefined || scopeRaw === null || String(scopeRaw).trim() === "") {
+    return fallback;
+  }
+
+  const scope = String(scopeRaw).trim().toLowerCase();
+  if (!MUTATION_SCOPES.has(scope)) {
+    throw new ApiError(400, "INVALID_SCOPE", "scope must be single, following, or series");
+  }
+  return scope;
+}
+
+function normalizeOccurrenceStart(raw, scope) {
+  if (scope === "series") {
+    if (raw === undefined || raw === null || String(raw).trim() === "") {
+      return null;
+    }
+    return requireDate(String(raw), "occurrenceStart");
+  }
+
+  if (raw === undefined || raw === null || String(raw).trim() === "") {
+    throw new ApiError(400, "OCCURRENCE_START_REQUIRED", "occurrenceStart is required for scope=single/following");
+  }
+
+  return requireDate(String(raw), "occurrenceStart");
+}
+
+function parseOccurrenceEventId(eventId) {
+  const marker = "::";
+  const index = eventId.indexOf(marker);
+  if (index <= 0) {
+    return null;
+  }
+
+  const base = eventId.slice(0, index);
+  const encodedOccurrence = eventId.slice(index + marker.length);
+  if (!base || !encodedOccurrence) {
+    return null;
+  }
+
+  let decoded;
+  try {
+    decoded = decodeURIComponent(encodedOccurrence);
+  } catch {
+    return null;
+  }
+
+  const occurrenceStart = requireDate(decoded, "occurrenceStart");
+  return {
+    eventId: base,
+    occurrenceStart,
+  };
+}
+
+function buildOccurrenceEventId(eventId, occurrenceStart) {
+  return `${eventId}::${encodeURIComponent(occurrenceStart)}`;
+}
+
+function materializeOccurrence(seriesEvent, occurrenceStart) {
+  const durationMs = Date.parse(seriesEvent.end) - Date.parse(seriesEvent.start);
+  const matches = generateOccurrences(seriesEvent, occurrenceStart, new Date(Date.parse(occurrenceStart) + 1).toISOString());
+  if (matches.length === 0) {
+    return null;
+  }
+
+  const start = matches[0];
+  return {
+    ...seriesEvent,
+    id: buildOccurrenceEventId(seriesEvent.id, start),
+    start,
+    end: new Date(Date.parse(start) + durationMs).toISOString(),
+    occurrenceStart: start,
+    seriesId: seriesEvent.id,
+    isRecurring: true,
+  };
+}
+
+function expandEventsInRange(events, rangeStart, rangeEnd) {
+  const expanded = [];
+  const detachedKeys = new Set();
+
+  for (const event of events) {
+    if (event.recurrence) {
+      continue;
+    }
+
+    if (!isWithinRange(event.start, rangeStart, rangeEnd)) {
+      continue;
+    }
+
+    expanded.push(event);
+    if (event.seriesId && event.occurrenceStart) {
+      detachedKeys.add(buildDetachedKey(event.seriesId, event.occurrenceStart));
+    }
+  }
+
+  for (const event of events) {
+    if (!event.recurrence) {
+      continue;
+    }
+
+    const durationMs = Date.parse(event.end) - Date.parse(event.start);
+    const starts = generateOccurrences(event, rangeStart, rangeEnd);
+    for (const start of starts) {
+      const detachedKey = buildDetachedKey(event.id, start);
+      if (detachedKeys.has(detachedKey)) {
+        continue;
+      }
+
+      expanded.push({
+        ...event,
+        id: buildOccurrenceEventId(event.id, start),
+        start,
+        end: new Date(Date.parse(start) + durationMs).toISOString(),
+        occurrenceStart: start,
+        seriesId: event.id,
+        isRecurring: true,
+      });
+    }
+  }
+
+  return expanded;
+}
+
+function generateOccurrences(event, rangeStart, rangeEnd) {
+  if (!event.recurrence) {
+    return [];
+  }
+
+  const recurrence = event.recurrence;
+  const startDate = new Date(event.start);
+  const rangeStartMs = Date.parse(rangeStart);
+  const rangeEndMs = Date.parse(rangeEnd);
+  const untilMs = recurrence.until ? Date.parse(recurrence.until) : Number.POSITIVE_INFINITY;
+  const countLimit = recurrence.count ?? Number.POSITIVE_INFINITY;
+  const exDateSet = new Set((recurrence.exDates || []).map((value) => new Date(value).toISOString()));
+
+  const results = [];
+  let generatedCount = 0;
+  let emitted = 0;
+  const maxGenerated = 5000;
+
+  for (const candidate of iterateRecurrenceCandidates(startDate, recurrence)) {
+    if (generatedCount >= maxGenerated || emitted >= countLimit) {
+      break;
+    }
+
+    const candidateIso = candidate.toISOString();
+    const candidateMs = Date.parse(candidateIso);
+    if (candidateMs > untilMs) {
+      break;
+    }
+
+    generatedCount += 1;
+    emitted += 1;
+
+    if (exDateSet.has(candidateIso)) {
+      continue;
+    }
+
+    if (candidateMs >= rangeStartMs && candidateMs < rangeEndMs) {
+      results.push(candidateIso);
+    }
+
+    if (candidateMs >= rangeEndMs) {
+      break;
+    }
+  }
+
+  return results;
+}
+
+function* iterateRecurrenceCandidates(startDate, recurrence) {
+  if (recurrence.freq === "DAILY") {
+    let cursor = new Date(startDate);
+    while (true) {
+      yield new Date(cursor);
+      cursor = addDays(cursor, recurrence.interval);
+    }
+  }
+
+  if (recurrence.freq === "WEEKLY") {
+    const weekStart = weekdayToIndex(recurrence.weekStart || "MO");
+    const baseWeekStart = startOfWeek(startDate, weekStart);
+    const time = pickUtcTime(startDate);
+    const byDay = recurrence.byDay.length > 0 ? recurrence.byDay : [indexToWeekday(startDate.getUTCDay())];
+    const dayOffsets = byDay
+      .map((day) => {
+        const idx = weekdayToIndex(day);
+        return (idx - weekStart + 7) % 7;
+      })
+      .sort((a, b) => a - b);
+
+    let weekOffset = 0;
+    while (true) {
+      const thisWeekStart = addDays(baseWeekStart, weekOffset * recurrence.interval * 7);
+      for (const offset of dayOffsets) {
+        const day = addDays(thisWeekStart, offset);
+        const candidate = withUtcTime(day, time);
+        if (candidate < startDate) {
+          continue;
+        }
+        yield candidate;
+      }
+      weekOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "MONTHLY") {
+    const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
+    const time = pickUtcTime(startDate);
+    let monthOffset = 0;
+
+    while (true) {
+      const monthDate = addMonthsUtc(startDate, monthOffset * recurrence.interval);
+      const year = monthDate.getUTCFullYear();
+      const month = monthDate.getUTCMonth();
+
+      const days = [...byMonthDay].sort((a, b) => a - b);
+      for (const dayOfMonth of days) {
+        const maxDay = daysInMonthUtc(year, month);
+        if (dayOfMonth > maxDay) {
+          continue;
+        }
+
+        const candidate = withUtcTime(new Date(Date.UTC(year, month, dayOfMonth)), time);
+        if (candidate < startDate) {
+          continue;
+        }
+        yield candidate;
+      }
+
+      monthOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "YEARLY") {
+    const month = startDate.getUTCMonth();
+    const day = startDate.getUTCDate();
+    const time = pickUtcTime(startDate);
+
+    let yearOffset = 0;
+    while (true) {
+      const year = startDate.getUTCFullYear() + yearOffset * recurrence.interval;
+      const maxDay = daysInMonthUtc(year, month);
+      if (day <= maxDay) {
+        const candidate = withUtcTime(new Date(Date.UTC(year, month, day)), time);
+        if (candidate >= startDate) {
+          yield candidate;
+        }
+      }
+      yearOffset += 1;
+    }
+  }
+}
+
+function buildDetachedKey(seriesId, occurrenceStart) {
+  return `${seriesId}::${occurrenceStart}`;
+}
+
+function parseRRule(rrule) {
+  if (typeof rrule !== "string" || rrule.trim() === "") {
+    throw new ApiError(400, "INVALID_RECURRENCE", "Invalid rrule");
+  }
+
+  const parts = {};
+  for (const pair of rrule.split(";")) {
+    const [keyRaw, valueRaw] = pair.split("=");
+    const key = String(keyRaw || "").trim().toUpperCase();
+    const value = String(valueRaw || "").trim();
+    if (!key || !value) {
+      continue;
+    }
+    parts[key] = value;
+  }
+
+  const recurrence = {
+    freq: parts.FREQ,
+    interval: parts.INTERVAL ? Number(parts.INTERVAL) : 1,
+    count: parts.COUNT ? Number(parts.COUNT) : null,
+    until: parts.UNTIL ? parseRruleUntil(parts.UNTIL) : null,
+    byDay: parts.BYDAY ? parts.BYDAY.split(",").map((v) => v.trim()) : [],
+    byMonthDay: parts.BYMONTHDAY
+      ? parts.BYMONTHDAY
+          .split(",")
+          .map((v) => Number(v.trim()))
+          .filter((n) => Number.isInteger(n))
+      : [],
+    weekStart: parts.WKST || null,
+    exDates: [],
+  };
+
+  return validateRecurrence(recurrence);
+}
+
+function parseRruleUntil(value) {
+  if (/^\d{8}T\d{6}Z$/.test(value)) {
+    const year = Number(value.slice(0, 4));
+    const month = Number(value.slice(4, 6)) - 1;
+    const day = Number(value.slice(6, 8));
+    const hour = Number(value.slice(9, 11));
+    const minute = Number(value.slice(11, 13));
+    const second = Number(value.slice(13, 15));
+    return new Date(Date.UTC(year, month, day, hour, minute, second)).toISOString();
+  }
+  return requireDate(value, "recurrence.until");
 }
 
 function validateRange(startRaw, endRaw) {
@@ -244,11 +778,12 @@ function readLimit(rawLimit) {
   return limit;
 }
 
-function readCursor(rawCursor) {
-  if (rawCursor === undefined || rawCursor === null || rawCursor === "") {
-    return null;
+function parseCursor(rawCursor) {
+  const parsed = Number(rawCursor || "0");
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return 0;
   }
-  return String(rawCursor);
+  return Math.floor(parsed);
 }
 
 function ensureId(id) {
@@ -284,4 +819,142 @@ function requireDate(value, field) {
     throw new ApiError(400, "INVALID_PAYLOAD", `${field} must be an ISO date-time string`);
   }
   return new Date(parsed).toISOString();
+}
+
+function normalizeIdempotencyKey(value) {
+  if (Array.isArray(value)) {
+    return value[0] || undefined;
+  }
+  return value;
+}
+
+function readPositiveInt(raw, field, fallback) {
+  if (raw === undefined || raw === null || raw === "") {
+    return fallback;
+  }
+  const num = Number(raw);
+  if (!Number.isInteger(num) || num <= 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", `${field} must be a positive integer`);
+  }
+  return num;
+}
+
+function normalizeByDay(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return [];
+  }
+
+  const values = Array.isArray(raw) ? raw : String(raw).split(",");
+  const unique = new Set();
+  for (const value of values) {
+    const normalized = normalizeWeekday(value, "recurrence.byDay");
+    unique.add(normalized);
+  }
+  return [...unique];
+}
+
+function normalizeByMonthDay(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return [];
+  }
+
+  const values = Array.isArray(raw) ? raw : String(raw).split(",");
+  const unique = new Set();
+  for (const value of values) {
+    const num = Number(value);
+    if (!Number.isInteger(num) || num < 1 || num > 31) {
+      throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byMonthDay must contain values 1..31");
+    }
+    unique.add(num);
+  }
+
+  return [...unique];
+}
+
+function normalizeExDates(raw) {
+  if (raw === undefined || raw === null || raw === "") {
+    return [];
+  }
+
+  const values = Array.isArray(raw) ? raw : String(raw).split(",");
+  const unique = new Set();
+  for (const value of values) {
+    unique.add(requireDate(String(value), "recurrence.exDates"));
+  }
+  return [...unique].sort();
+}
+
+function normalizeWeekday(raw, field) {
+  if (typeof raw !== "string") {
+    throw new ApiError(400, "INVALID_RECURRENCE", `${field} must contain weekday values`);
+  }
+
+  const upper = raw.trim().toUpperCase();
+  if (!VALID_WEEKDAYS.has(upper)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", `${field} must contain weekday values like MO,TU,...`);
+  }
+  return upper;
+}
+
+function weekdayToIndex(day) {
+  const normalized = normalizeWeekday(day, "weekday");
+  const order = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+  return order.indexOf(normalized);
+}
+
+function indexToWeekday(index) {
+  const order = ["SU", "MO", "TU", "WE", "TH", "FR", "SA"];
+  return order[((index % 7) + 7) % 7];
+}
+
+function addDays(date, days) {
+  return new Date(date.getTime() + days * 24 * 60 * 60 * 1000);
+}
+
+function addMonthsUtc(date, deltaMonths) {
+  const year = date.getUTCFullYear();
+  const month = date.getUTCMonth() + deltaMonths;
+  const day = date.getUTCDate();
+
+  const first = new Date(Date.UTC(year, month, 1, date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds(), date.getUTCMilliseconds()));
+  const maxDay = daysInMonthUtc(first.getUTCFullYear(), first.getUTCMonth());
+  return new Date(Date.UTC(first.getUTCFullYear(), first.getUTCMonth(), Math.min(day, maxDay), date.getUTCHours(), date.getUTCMinutes(), date.getUTCSeconds(), date.getUTCMilliseconds()));
+}
+
+function daysInMonthUtc(year, month) {
+  return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function startOfWeek(date, weekStartDayIndex) {
+  const midnight = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
+  const diff = (midnight.getUTCDay() - weekStartDayIndex + 7) % 7;
+  return addDays(midnight, -diff);
+}
+
+function pickUtcTime(date) {
+  return {
+    hours: date.getUTCHours(),
+    minutes: date.getUTCMinutes(),
+    seconds: date.getUTCSeconds(),
+    milliseconds: date.getUTCMilliseconds(),
+  };
+}
+
+function withUtcTime(date, time) {
+  return new Date(
+    Date.UTC(
+      date.getUTCFullYear(),
+      date.getUTCMonth(),
+      date.getUTCDate(),
+      time.hours,
+      time.minutes,
+      time.seconds,
+      time.milliseconds
+    )
+  );
+}
+
+function isWithinRange(start, rangeStart, rangeEnd) {
+  const startMs = Date.parse(start);
+  return startMs >= Date.parse(rangeStart) && startMs < Date.parse(rangeEnd);
 }
