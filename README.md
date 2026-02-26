@@ -4,6 +4,32 @@ Private repository scaffold for the Proton Calendar API project.
 
 POC status: manual Proton login and cookie/session bootstrap is working, and the API supports multi-calendar routing, recurrence, and a JSON-first CLI.
 
+## Repository mirrors
+
+This project is mirrored to two private remotes:
+
+- GitHub (`origin`): `git@github.com:hacker-h/proton-calendar-api.git`
+- GitLab (`gitlab`, group `shared-with-toni`): `ssh://git@gitlab.xhacker.de:8022/shared-with-toni/proton-calendar-api.git`
+
+If you clone from GitHub and need to add the GitLab remote locally:
+
+```bash
+git remote add gitlab ssh://git@gitlab.xhacker.de:8022/shared-with-toni/proton-calendar-api.git
+```
+
+Push updates to both remotes:
+
+```bash
+git push origin main --follow-tags
+git push gitlab main --follow-tags
+```
+
+Verify remotes:
+
+```bash
+git remote -v
+```
+
 ## Quickstart
 
 1) Install dependencies:
