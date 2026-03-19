@@ -287,6 +287,10 @@ export API_BEARER_TOKEN="replace-me"
 export COOKIE_BUNDLE_PATH="secrets/proton-cookies.json"
 export PROTON_BASE_URL="https://calendar.proton.me"
 export PROTON_AUTH_DEBUG="1"
+export PROTON_AUTO_RELOGIN="1"
+export PROTON_RELOGIN_MODE="hybrid"
+export PROTON_PROFILE_DIR="$HOME/Library/Application Support/Google/Chrome"
+export PROTON_CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
 
 Run API server:
@@ -321,6 +325,7 @@ Notes:
 
 - On `401/403` from Proton, the server attempts cookie refresh via Proton refresh endpoints using the stored `REFRESH-*` cookie payload.
 - Any returned `Set-Cookie` headers are merged into `COOKIE_BUNDLE_PATH` automatically.
+- When `PROTON_AUTO_RELOGIN=1`, the client can also re-bootstrap cookies automatically after refresh failure. `PROTON_RELOGIN_MODE=hybrid` tries headless recovery first, then falls back to a visible Chrome window.
 - When `PROTON_AUTH_DEBUG=1`, refresh logs are emitted with cookie change details and expiry timestamps.
 
 Manual verification commands:

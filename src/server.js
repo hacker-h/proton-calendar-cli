@@ -19,6 +19,15 @@ export function createApiServer(config, options = {}) {
       timeoutMs: config.protonTimeoutMs,
       maxRetries: config.protonMaxRetries,
       debugAuth: config.protonAuthDebug,
+      autoRelogin: config.protonAutoRelogin,
+      reloginMode: config.protonReloginMode,
+      reloginTimeoutMs: config.protonReloginTimeoutMs,
+      reloginPollSeconds: config.protonReloginPollSeconds,
+      chromePath: config.protonChromePath,
+      profileDir: config.protonProfileDir,
+      loginUrl: config.protonReloginUrl,
+      authManager: options.authManager,
+      bootstrapRunner: options.bootstrapRunner,
       fetchImpl: options.fetchImpl,
     });
   const service =
@@ -152,7 +161,7 @@ export function createApiServer(config, options = {}) {
 export async function startApiServer(config, options = {}) {
   const app = createApiServer(config, options);
   const host = options.host || "127.0.0.1";
-  const port = options.port || config.port;
+  const port = options.port ?? config.port;
 
   await new Promise((resolve, reject) => {
     app.server.listen(port, host, (error) => {

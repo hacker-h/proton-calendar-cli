@@ -12,6 +12,10 @@ export class CookieSessionStore {
     this.lastLoadedAt = null;
   }
 
+  getBundlePath() {
+    return this.cookieBundlePath;
+  }
+
   async getCookieHeader(urlString) {
     await this.#reloadIfNeeded();
     const url = new URL(urlString);
@@ -142,6 +146,12 @@ export class CookieSessionStore {
     this.lastLoadedAt = new Date().toISOString();
 
     return changes;
+  }
+
+  async invalidate() {
+    this.cachedMtimeMs = -1;
+    this.lastLoadedAt = null;
+    await this.#reloadIfNeeded();
   }
 
   async #reloadIfNeeded() {

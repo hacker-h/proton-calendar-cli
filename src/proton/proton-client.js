@@ -1,6 +1,7 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as openpgp from "openpgp";
 import { ApiError } from "../errors.js";
+import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const DEFAULT_APP_VERSION = "web-calendar@5.0.101.3";
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
@@ -15,6 +16,20 @@ export class ProtonCalendarClient {
     this.appVersion = options.appVersion || DEFAULT_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
+    this.authManager =
+      options.authManager ||
+      new ProtonAuthManager({
+        sessionStore: this.sessionStore,
+        enabled: options.autoRelogin,
+        mode: options.reloginMode,
+        timeoutMs: options.reloginTimeoutMs,
+        pollSeconds: options.reloginPollSeconds,
+        chromePath: options.chromePath,
+        profileDir: options.profileDir,
+        loginUrl: options.loginUrl,
+        bootstrapRunner: options.bootstrapRunner,
+        debugAuth: options.debugAuth,
+      });
 
     this.cachedUID = "";
     this.cachedContext = null;
@@ -515,7 +530,9 @@ export class ProtonCalendarClient {
         await this.#requestJSON("GET", "/api/core/v4/users", {
           uid,
           allowAuthRefresh: false,
+          allowRelogin: false,
         });
+        this.#resetAuthCaches();
         this.#authLog("Auth refresh validated", { uid, refreshUrl });
         return true;
       } catch {
@@ -763,6 +780,14 @@ export class ProtonCalendarClient {
             }
           }
 
+          if (options.allowRelogin !== false) {
+            const relogged = await this.#attemptRelogin(uid, `${method}:${pathname}`);
+            if (relogged) {
+              attempt -= 1;
+              continue;
+            }
+          }
+
           throw new ApiError(401, "AUTH_EXPIRED", "Proton session is expired or unauthorized");
         }
 
@@ -807,6 +832,30 @@ export class ProtonCalendarClient {
     }
 
     throw new ApiError(502, "UPSTREAM_UNREACHABLE", "Unable to reach Proton backend");
+  }
+
+  async #attemptRelogin(uid, reason) {
+    if (!this.authManager || typeof this.authManager.recover !== "function") {
+      return false;
+    }
+
+    const recovered = await this.authManager.recover({ uid, reason });
+    if (!recovered) {
+      return false;
+    }
+
+    if (typeof this.sessionStore.invalidate === "function") {
+      await this.sessionStore.invalidate();
+    }
+
+    this.#resetAuthCaches();
+    this.#authLog("Relogin recovered session", { uid, reason });
+    return true;
+  }
+
+  #resetAuthCaches() {
+    this.cachedUID = "";
+    this.cachedContext = null;
   }
 }
 

@@ -42,7 +42,7 @@ async function main() {
   console.log(`- Profile: ${profileDir}`);
   console.log(`- DevTools: http://127.0.0.1:${devtoolsPort}`);
 
-  const chrome = launchChrome(chromePath, profileDir, devtoolsPort, loginUrl);
+  const chrome = launchChrome(chromePath, profileDir, devtoolsPort, loginUrl, options.headless);
   let completed = false;
 
   try {
@@ -131,6 +131,7 @@ function parseArgs(argv) {
     loginUrl: "https://calendar.proton.me/u/0",
     profileDir: "",
     chromePath: process.env.CHROME_PATH || "",
+    headless: false,
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -171,6 +172,10 @@ function parseArgs(argv) {
       options.keepProfile = true;
       continue;
     }
+    if (arg === "--headless") {
+      options.headless = true;
+      continue;
+    }
     if (arg === "--help" || arg === "-h") {
       printHelp();
       process.exit(0);
@@ -198,6 +203,7 @@ Options:
   --output <path>         Export file path (default: secrets/proton-cookies.json)
   --profile-dir <path>    Reuse an existing Chrome profile directory
   --keep-profile          Keep temp profile directory after export
+  --headless              Launch Chrome headlessly for recovery attempts
   --chrome-path <path>    Chrome executable path
   --login-url <url>       URL to open for login (default: https://calendar.proton.me/u/0)
 `);
@@ -213,16 +219,21 @@ function defaultChromePath() {
   return "/usr/bin/google-chrome";
 }
 
-function launchChrome(chromePath, profileDir, devtoolsPort, loginUrl) {
+function launchChrome(chromePath, profileDir, devtoolsPort, loginUrl, headless = false) {
   const args = [
     `--remote-debugging-port=${devtoolsPort}`,
     `--user-data-dir=${profileDir}`,
-    "--new-window",
     "--no-first-run",
     "--no-default-browser-check",
     "--allow-insecure-localhost",
     loginUrl,
   ];
+
+  if (headless) {
+    args.splice(2, 0, "--headless=new");
+  } else {
+    args.splice(2, 0, "--new-window");
+  }
 
   const child = spawn(chromePath, args, {
     stdio: "ignore",

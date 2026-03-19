@@ -17,6 +17,13 @@ export function loadConfigFromEnv(env = process.env) {
     protonTimeoutMs: readNumber(env.PROTON_TIMEOUT_MS, 10000),
     protonMaxRetries: readNumber(env.PROTON_MAX_RETRIES, 2),
     protonAuthDebug: readBoolean(env.PROTON_AUTH_DEBUG, false),
+    protonAutoRelogin: readBoolean(env.PROTON_AUTO_RELOGIN, false),
+    protonReloginMode: readEnum(env.PROTON_RELOGIN_MODE, ["disabled", "headless", "headful", "hybrid"], "hybrid"),
+    protonChromePath: readOptional(env.PROTON_CHROME_PATH),
+    protonProfileDir: readOptional(env.PROTON_PROFILE_DIR),
+    protonReloginTimeoutMs: readNumber(env.PROTON_RELOGIN_TIMEOUT_MS, 120000),
+    protonReloginPollSeconds: readNumber(env.PROTON_RELOGIN_POLL_SECONDS, 3),
+    protonReloginUrl: readOptional(env.PROTON_RELOGIN_URL) || "https://calendar.proton.me/u/0",
   };
 }
 
@@ -90,4 +97,13 @@ function readBoolean(value, fallback) {
     return false;
   }
   return fallback;
+}
+
+function readEnum(value, allowedValues, fallback) {
+  if (typeof value !== "string") {
+    return fallback;
+  }
+
+  const normalized = value.trim().toLowerCase();
+  return allowedValues.includes(normalized) ? normalized : fallback;
 }

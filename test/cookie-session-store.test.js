@@ -81,6 +81,46 @@ test("applySetCookieHeaders removes cookies with max-age 0", async () => {
   assert.equal(header.includes("AUTH-uid-1"), false);
 });
 
+test("invalidate reloads updated cookies from disk", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cookie-store-invalidate-test-"));
+  const bundlePath = path.join(tmpDir, "cookies.json");
+  await writeBundle(bundlePath, {
+    cookies: [
+      {
+        name: "AUTH-uid-1",
+        value: "old-value",
+        domain: "calendar.proton.me",
+        path: "/api/",
+        secure: true,
+      },
+    ],
+  });
+
+  const store = new CookieSessionStore({
+    cookieBundlePath: bundlePath,
+  });
+
+  let header = await store.getCookieHeader("https://calendar.proton.me/api/core/v4/users");
+  assert.equal(header.includes("AUTH-uid-1=old-value"), true);
+
+  await writeBundle(bundlePath, {
+    cookies: [
+      {
+        name: "AUTH-uid-1",
+        value: "new-value",
+        domain: "calendar.proton.me",
+        path: "/api/",
+        secure: true,
+      },
+    ],
+  });
+
+  await store.invalidate();
+
+  header = await store.getCookieHeader("https://calendar.proton.me/api/core/v4/users");
+  assert.equal(header.includes("AUTH-uid-1=new-value"), true);
+});
+
 async function writeBundle(filePath, payload) {
   await writeFile(
     filePath,

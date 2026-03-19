@@ -165,6 +165,173 @@ test("authStatus refreshes auth cookies and retries request", async () => {
   assert.equal(setCookieChanges.length >= 1, true);
 });
 
+test("authStatus falls back to relogin when refresh cannot recover session", async () => {
+  const calls = [];
+  let usersRequestCount = 0;
+  let reloginCount = 0;
+  let refreshedCookies = false;
+  let invalidated = 0;
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(String(url));
+    calls.push(parsed.pathname);
+
+    if (parsed.pathname === "/api/core/v4/users") {
+      usersRequestCount += 1;
+      if (usersRequestCount === 1) {
+        return jsonResponse(401, { Code: 2001, Error: "Unauthorized" });
+      }
+      return jsonResponse(200, {
+        Code: 1000,
+        User: {
+          Name: "assistant",
+          ID: "user-1",
+        },
+      });
+    }
+
+    if (parsed.pathname === "/api/auth/refresh" || parsed.pathname === "/api/auth/v4/refresh") {
+      return jsonResponse(400, { Code: 10013, Error: "Refresh token invalid" });
+    }
+
+    throw new Error(`Unexpected URL: ${parsed.pathname}`);
+  };
+
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getUIDCandidates() {
+        return ["uid-123"];
+      },
+      async getCookieHeader() {
+        return refreshedCookies
+          ? "AUTH-uid-123=relogin-auth; REFRESH-uid-123=%7B%22RefreshToken%22%3A%22fresh%22%2C%22UID%22%3A%22uid-123%22%7D"
+          : "AUTH-uid-123=old-auth; REFRESH-uid-123=%7B%22RefreshToken%22%3A%22old%22%2C%22UID%22%3A%22uid-123%22%7D";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+      async getBundle() {
+        return {
+          cookies: [
+            {
+              name: "REFRESH-uid-123",
+              value: "%7B%22RefreshToken%22%3A%22old%22%2C%22UID%22%3A%22uid-123%22%7D",
+              domain: "calendar.proton.me",
+              path: "/api/auth/refresh",
+            },
+          ],
+        };
+      },
+      async applySetCookieHeaders() {
+        return [];
+      },
+      async invalidate() {
+        invalidated += 1;
+      },
+    },
+    authManager: {
+      async recover() {
+        reloginCount += 1;
+        refreshedCookies = true;
+        return true;
+      },
+    },
+    maxRetries: 0,
+    fetchImpl,
+  });
+
+  const status = await client.authStatus();
+  assert.equal(status.uid, "uid-123");
+  assert.equal(status.username, "assistant");
+  assert.equal(reloginCount, 1);
+  assert.equal(invalidated >= 1, true);
+  assert.equal(calls.includes("/api/auth/refresh") || calls.includes("/api/auth/v4/refresh"), true);
+});
+
+test("concurrent auth failures share a single relogin attempt", async () => {
+  let reloginCount = 0;
+  let refreshedCookies = false;
+
+  const fetchImpl = async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/core/v4/users") {
+      if (!refreshedCookies) {
+        return jsonResponse(401, { Code: 2001, Error: "Unauthorized" });
+      }
+      return jsonResponse(200, {
+        Code: 1000,
+        User: {
+          Name: "assistant",
+          ID: "user-1",
+        },
+      });
+    }
+
+    if (parsed.pathname === "/api/auth/refresh" || parsed.pathname === "/api/auth/v4/refresh") {
+      return jsonResponse(400, { Code: 10013, Error: "Refresh token invalid" });
+    }
+
+    throw new Error(`Unexpected URL: ${parsed.pathname}`);
+  };
+
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getUIDCandidates() {
+        return ["uid-123"];
+      },
+      async getCookieHeader() {
+        return refreshedCookies
+          ? "AUTH-uid-123=relogin-auth; REFRESH-uid-123=%7B%22RefreshToken%22%3A%22fresh%22%2C%22UID%22%3A%22uid-123%22%7D"
+          : "AUTH-uid-123=old-auth; REFRESH-uid-123=%7B%22RefreshToken%22%3A%22old%22%2C%22UID%22%3A%22uid-123%22%7D";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+      async getBundle() {
+        return {
+          cookies: [
+            {
+              name: "REFRESH-uid-123",
+              value: "%7B%22RefreshToken%22%3A%22old%22%2C%22UID%22%3A%22uid-123%22%7D",
+              domain: "calendar.proton.me",
+              path: "/api/auth/refresh",
+            },
+          ],
+        };
+      },
+      async applySetCookieHeaders() {
+        return [];
+      },
+      async invalidate() {},
+    },
+    authManager: {
+      inFlightRecovery: null,
+      async recover() {
+        if (this.inFlightRecovery) {
+          return this.inFlightRecovery;
+        }
+        this.inFlightRecovery = (async () => {
+          reloginCount += 1;
+          await new Promise((resolve) => setTimeout(resolve, 10));
+          refreshedCookies = true;
+          this.inFlightRecovery = null;
+          return true;
+        })();
+        return this.inFlightRecovery;
+      },
+    },
+    maxRetries: 0,
+    fetchImpl,
+  });
+
+  const [first, second] = await Promise.all([client.authStatus(), client.authStatus()]);
+  assert.equal(first.uid, "uid-123");
+  assert.equal(second.uid, "uid-123");
+  assert.equal(reloginCount, 1);
+});
+
 function jsonResponse(status, payload, headers = []) {
   return new Response(`${JSON.stringify(payload)}\n`, {
     status,
