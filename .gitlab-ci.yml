@@ -49,7 +49,7 @@ cache:
       set -a
       . "$CI_LIVE_ENV_PATH"
       set +a
-      export PORT=8787
+      export PORT=$((8700 + (${CI_JOB_ID:-0} % 1000)))
       export PC_API_BASE_URL="http://127.0.0.1:${PORT}"
       export PROTON_AUTH_DEBUG=1
       export PROTON_AUTO_RELOGIN=0
