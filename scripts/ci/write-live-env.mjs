@@ -3,7 +3,8 @@
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
-const cookieBundlePath = path.resolve(process.env.COOKIE_BUNDLE_PATH || "secrets/proton-cookies.json");
+const cookieBundleRelativePath = "secrets/proton-cookies.json";
+const cookieBundlePath = path.resolve(process.env.COOKIE_BUNDLE_PATH || cookieBundleRelativePath);
 const outputPath = path.resolve(process.env.CI_LIVE_ENV_PATH || "secrets/ci-live.env");
 
 const bundle = JSON.parse(await readFile(cookieBundlePath, "utf8"));
@@ -26,7 +27,7 @@ const apiBearerToken = String(process.env.API_BEARER_TOKEN || "gitlab-live-token
 const protonBaseUrl = String(process.env.PROTON_BASE_URL || "https://calendar.proton.me").trim();
 
 const lines = [
-  `COOKIE_BUNDLE_PATH=${quote(cookieBundlePath)}`,
+  `COOKIE_BUNDLE_PATH=${quote(cookieBundleRelativePath)}`,
   `TARGET_CALENDAR_ID=${quote(configuredCalendarId)}`,
   `DEFAULT_CALENDAR_ID=${quote(configuredCalendarId)}`,
   `ALLOWED_CALENDAR_IDS=${quote(allowedCalendarIds.join(","))}`,
@@ -47,7 +48,7 @@ console.log(JSON.stringify({
     outputPath,
     calendarId: configuredCalendarId,
     allowedCalendarIds,
-    cookieBundlePath,
+    cookieBundlePath: cookieBundleRelativePath,
   },
 }, null, 2));
 
