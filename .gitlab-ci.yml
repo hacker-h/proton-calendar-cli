@@ -53,6 +53,7 @@ cache:
       export PC_API_BASE_URL="http://127.0.0.1:${PORT}"
       export PROTON_AUTH_DEBUG=1
       export PROTON_AUTO_RELOGIN=0
+      node src/cli.js doctor auth --cookie-bundle "$COOKIE_BUNDLE_PATH" --output json > artifacts/doctor-auth.json
       node src/index.js > artifacts/api-server.log 2>&1 &
       API_PID=$!
       trap 'kill $API_PID' EXIT
