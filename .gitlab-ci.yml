@@ -1,0 +1,109 @@
+image: node:22-bookworm
+
+stages:
+  - test
+  - live-bootstrap
+  - live-test
+
+variables:
+  PNPM_STORE_DIR: .pnpm-store
+  PLAYWRIGHT_BROWSERS_PATH: $CI_PROJECT_DIR/.playwright
+  COOKIE_BUNDLE_PATH: $CI_PROJECT_DIR/secrets/proton-cookies.json
+  CI_LIVE_ENV_PATH: $CI_PROJECT_DIR/secrets/ci-live.env
+  API_BEARER_TOKEN: gitlab-live-token
+  PROTON_BASE_URL: https://calendar.proton.me
+
+cache:
+  key:
+    files:
+      - pnpm-lock.yaml
+  paths:
+    - .pnpm-store/
+    - .playwright/
+
+.pnpm_setup:
+  before_script:
+    - corepack enable
+    - pnpm config set store-dir "$PNPM_STORE_DIR"
+    - pnpm install --frozen-lockfile
+
+.live_test_template:
+  extends: .pnpm_setup
+  stage: live-test
+  needs:
+    - job: live:bootstrap
+      artifacts: true
+  rules:
+    - if: '$PROTON_USERNAME && $PROTON_PASSWORD'
+      when: on_success
+    - when: never
+  script:
+    - |
+      mkdir -p artifacts
+      set -a
+      . "$CI_LIVE_ENV_PATH"
+      set +a
+      export PORT=8787
+      export PC_API_BASE_URL="http://127.0.0.1:${PORT}"
+      export PROTON_AUTH_DEBUG=1
+      export PROTON_AUTO_RELOGIN=0
+      node src/index.js > artifacts/api-server.log 2>&1 &
+      API_PID=$!
+      trap 'kill $API_PID' EXIT
+      node -e 'const url=`http://127.0.0.1:${process.env.PORT}/v1/health`; const deadline=Date.now()+45000; (async()=>{ while (Date.now()<deadline) { try { const res=await fetch(url); if (res.ok) return; } catch {} await new Promise((resolve)=>setTimeout(resolve, 1000)); } throw new Error(`API did not become ready: ${url}`); })().catch((error)=>{ console.error(error.message); process.exit(1); });'
+      pnpm run "$LIVE_TEST_SCRIPT"
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - artifacts/
+      - secrets/ci-live.env
+      - secrets/proton-cookies.json
+
+test:unit:
+  extends: .pnpm_setup
+  stage: test
+  script:
+    - pnpm test:unit
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - junit.xml
+    reports:
+      junit: junit.xml
+  after_script:
+    - |
+      node --test --test-reporter=junit --test-reporter-destination=junit.xml "test/*.test.js" >/dev/null 2>&1 || true
+
+live:bootstrap:
+  extends: .pnpm_setup
+  stage: live-bootstrap
+  needs:
+    - job: test:unit
+  rules:
+    - if: '$PROTON_USERNAME && $PROTON_PASSWORD'
+      when: on_success
+    - when: never
+  script:
+    - mkdir -p secrets artifacts
+    - pnpm exec playwright install --with-deps chromium
+    - pnpm run bootstrap:cookies:ci -- --output "$COOKIE_BUNDLE_PATH" | tee artifacts/bootstrap-output.json
+    - node scripts/ci/write-live-env.mjs | tee artifacts/live-env-output.json
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - artifacts/
+      - secrets/proton-cookies.json
+      - secrets/ci-live.env
+
+test:live:api:
+  extends: .live_test_template
+  variables:
+    LIVE_TEST_SCRIPT: test:live:api
+
+test:live:cli:
+  extends: .live_test_template
+  variables:
+    LIVE_TEST_SCRIPT: test:live:cli

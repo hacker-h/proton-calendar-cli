@@ -8,11 +8,17 @@
   },
   "scripts": {
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
+    "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
     "pc": "node src/cli.js",
     "start": "node src/index.js",
-    "test": "node --test \"test/**/*.test.js\""
+    "test": "node --test \"test/*.test.js\"",
+    "test:unit": "node --test \"test/*.test.js\"",
+    "test:live": "node --test \"test/live/**/*.test.js\"",
+    "test:live:api": "node --test \"test/live/api.live.test.js\"",
+    "test:live:cli": "node --test \"test/live/cli.live.test.js\""
   },
   "devDependencies": {
+    "playwright": "^1.54.2",
     "sweetlink": "^0.2.0"
   },
   "dependencies": {

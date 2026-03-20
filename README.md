@@ -384,3 +384,34 @@ Run tests:
 ```bash
 pnpm test
 ```
+
+## GitLab CI
+
+The repository includes a GitLab pipeline with:
+
+- `test:unit` for the fast mocked/unit suite,
+- `live:bootstrap` for headless Proton login and cookie/session export, and
+- `test:live:api` / `test:live:cli` for real Proton-backed smoke coverage.
+
+Configure these GitLab CI variables as masked/protected variables:
+
+```bash
+PROTON_USERNAME=<test account username>
+PROTON_PASSWORD=<test account password>
+PROTON_TEST_CALENDAR_ID=<dedicated calendar id>
+```
+
+Optional variables:
+
+```bash
+API_BEARER_TOKEN=gitlab-live-token
+PROTON_BASE_URL=https://calendar.proton.me
+PROTON_LOGIN_TIMEOUT_MS=180000
+PROTON_POST_LOGIN_TIMEOUT_MS=120000
+```
+
+Notes:
+
+- Use a dedicated Proton test calendar for CI cleanup safety.
+- The CI bootstrap job writes `secrets/proton-cookies.json` and `secrets/ci-live.env` as artifacts for downstream jobs.
+- The live suite creates uniquely prefixed events and removes them after each run.

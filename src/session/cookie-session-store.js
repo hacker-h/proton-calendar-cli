@@ -46,10 +46,32 @@ export class CookieSessionStore {
 
   async getUIDCandidates() {
     await this.#reloadIfNeeded();
-    if (!Array.isArray(this.bundle?.uidCandidates)) {
-      return [];
+
+    const values = new Set();
+    if (Array.isArray(this.bundle?.uidCandidates)) {
+      for (const value of this.bundle.uidCandidates) {
+        if (typeof value === "string" && value.length > 0) {
+          values.add(value);
+        }
+      }
     }
-    return this.bundle.uidCandidates.filter((value) => typeof value === "string" && value.length > 0);
+
+    const authProbeUid = this.bundle?.authProbe?.uid;
+    if (typeof authProbeUid === "string" && authProbeUid.length > 0) {
+      values.add(authProbeUid);
+    }
+
+    const persistedSessions = this.bundle?.persistedSessions;
+    if (persistedSessions && typeof persistedSessions === "object") {
+      for (const value of Object.values(persistedSessions)) {
+        const uid = value && typeof value === "object" ? value.UID : null;
+        if (typeof uid === "string" && uid.length > 0) {
+          values.add(uid);
+        }
+      }
+    }
+
+    return [...values];
   }
 
   async getPersistedSessions() {
@@ -212,9 +234,16 @@ function parseCookies(parsed) {
     }
   }
 
-  return rows
-    .map((cookie) => normalizeCookie(cookie))
-    .filter((cookie) => cookie && cookie.name && cookie.value);
+  const deduped = new Map();
+  for (const row of rows) {
+    const cookie = normalizeCookie(row);
+    if (!cookie || !cookie.name || !cookie.value) {
+      continue;
+    }
+    deduped.set(cookieKey(cookie), cookie);
+  }
+
+  return [...deduped.values()].sort((a, b) => cookieKey(a).localeCompare(cookieKey(b)));
 }
 
 function normalizeCookie(cookie) {
