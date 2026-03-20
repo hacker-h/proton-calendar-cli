@@ -1,5 +1,11 @@
 image: node:22-bookworm
 
+default:
+  tags:
+    - llm
+    - mac
+    - arm64
+
 stages:
   - test
   - live-bootstrap
