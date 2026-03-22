@@ -1,6 +1,11 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { ProtonCalendarClient } from "../src/proton/proton-client.js";
+import {
+  buildCreateSyncRequestBody,
+  buildSharedParts,
+  buildUpdateSyncRequestBody,
+  ProtonCalendarClient,
+} from "../src/proton/proton-client.js";
 
 test("authStatus uses UID candidate, cookies, and Proton headers", async () => {
   const requests = [];
@@ -330,6 +335,86 @@ test("concurrent auth failures share a single relogin attempt", async () => {
   assert.equal(first.uid, "uid-123");
   assert.equal(second.uid, "uid-123");
   assert.equal(reloginCount, 1);
+});
+
+test("buildSharedParts keeps UTC timestamps for UTC events", () => {
+  const parts = buildSharedParts({
+    uid: "event-1",
+    sequence: 0,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-03-21T10:00:00.000Z"),
+    endDate: new Date("2026-03-21T10:30:00.000Z"),
+    title: "UTC event",
+    description: "",
+    location: "",
+    recurrence: null,
+    createdDate: new Date("2026-03-20T09:00:00.000Z"),
+    timezone: "UTC",
+  });
+
+  assert.match(parts.signedPart, /DTSTART:20260321T100000Z/);
+  assert.match(parts.signedPart, /DTEND:20260321T103000Z/);
+  assert.doesNotMatch(parts.signedPart, /TZID=/);
+});
+
+test("buildSharedParts emits TZID timestamps for non-UTC events", () => {
+  const parts = buildSharedParts({
+    uid: "event-2",
+    sequence: 2,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-03-21T10:00:00.000Z"),
+    endDate: new Date("2026-03-21T11:30:00.000Z"),
+    title: "Berlin event",
+    description: "",
+    location: "",
+    recurrence: null,
+    createdDate: new Date("2026-03-20T09:00:00.000Z"),
+    timezone: "Europe/Berlin",
+  });
+
+  assert.match(parts.signedPart, /DTSTART;TZID=Europe\/Berlin:20260321T110000/);
+  assert.match(parts.signedPart, /DTEND;TZID=Europe\/Berlin:20260321T123000/);
+});
+
+test("buildCreateSyncRequestBody grants organizer write permissions", () => {
+  const body = buildCreateSyncRequestBody({
+    memberId: "member-1",
+    sharedKeyPacket: "packet",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+  });
+
+  assert.equal(body.MemberID, "member-1");
+  assert.equal(body.Events.length, 1);
+  assert.equal(body.Events[0].Overwrite, 0);
+  assert.equal(body.Events[0].Event.Permissions, 3);
+  assert.equal(body.Events[0].Event.IsOrganizer, 1);
+});
+
+test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
+  const followingBody = buildUpdateSyncRequestBody({
+    memberId: "member-1",
+    eventId: "event-1",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+    notifications: null,
+    color: null,
+    scope: "following",
+    occurrenceStart: "2026-03-21T10:00:00.000Z",
+  });
+  const singleBody = buildUpdateSyncRequestBody({
+    memberId: "member-1",
+    eventId: "event-1",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+    notifications: null,
+    color: null,
+    scope: "single",
+  });
+
+  assert.equal(followingBody.Events[0].Event.Permissions, 3);
+  assert.equal(followingBody.Events[0].Event.IsBreakingChange, 1);
+  assert.equal(followingBody.Events[0].Event.IsPersonalSingleEdit, false);
+  assert.equal(followingBody.Events[0].Event.RecurrenceID, 1774087200);
+  assert.equal(singleBody.Events[0].Event.IsBreakingChange, 0);
+  assert.equal(singleBody.Events[0].Event.IsPersonalSingleEdit, true);
 });
 
 function jsonResponse(status, payload, headers = []) {

@@ -26,7 +26,7 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
 
     const title = buildEventTitle(config, "cli");
     const create = await runJsonCli([
-      "create",
+      "new",
       ...(config.calendarId ? ["--calendar", config.calendarId] : []),
       `title=${title}`,
       "description=gitlab live cli",

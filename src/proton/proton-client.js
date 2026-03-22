@@ -108,6 +108,7 @@ export class ProtonCalendarClient {
       description: event.description || "",
       location: event.location || "",
       recurrence: event.recurrence || null,
+      timezone: event.timezone || "UTC",
     });
 
     const sessionKey = await openpgp.generateSessionKey({ encryptionKeys: context.calendarPublicKey });
@@ -120,22 +121,11 @@ export class ProtonCalendarClient {
 
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
-    const body = {
-      MemberID: context.memberId,
-      Events: [
-        {
-          Overwrite: 0,
-          Event: {
-            Permissions: 1,
-            IsOrganizer: 1,
-            SharedKeyPacket: toBase64(sharedKeyPacket),
-            SharedEventContent: sharedEventContent,
-            Notifications: null,
-            Color: null,
-          },
-        },
-      ],
-    };
+    const body = buildCreateSyncRequestBody({
+      memberId: context.memberId,
+      sharedKeyPacket: toBase64(sharedKeyPacket),
+      sharedEventContent,
+    });
 
     const response = await this.#requestJSON(
       "PUT",
@@ -174,6 +164,7 @@ export class ProtonCalendarClient {
       recurrence: patch.recurrence === undefined ? decoded.recurrence : patch.recurrence,
       organizerEmail: context.addressEmail,
       createdDate: decoded.createdDate,
+      timezone: patch.timezone ?? String(existing.StartTimezone || "UTC"),
     };
 
     const sharedParts = buildSharedParts({
@@ -187,29 +178,21 @@ export class ProtonCalendarClient {
       location: merged.location,
       recurrence: merged.recurrence,
       createdDate: merged.createdDate,
+      timezone: merged.timezone,
     });
 
     const sessionKey = await this.#decryptSharedSessionKey(context, existing.SharedKeyPacket);
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
-    const body = {
-      MemberID: context.memberId,
-      Events: [
-        {
-          ID: eventId,
-          Event: {
-            Permissions: 1,
-            IsOrganizer: 1,
-            IsBreakingChange: scope === "following" ? 1 : 0,
-            IsPersonalSingleEdit: scope === "single",
-            SharedEventContent: sharedEventContent,
-            Notifications: existing.Notifications || null,
-            Color: existing.Color || null,
-            ...(occurrenceStart ? { RecurrenceID: toUnix(occurrenceStart) } : {}),
-          },
-        },
-      ],
-    };
+    const body = buildUpdateSyncRequestBody({
+      memberId: context.memberId,
+      eventId,
+      sharedEventContent,
+      notifications: existing.Notifications || null,
+      color: existing.Color || null,
+      scope,
+      occurrenceStart,
+    });
 
     const response = await this.#requestJSON(
       "PUT",
@@ -932,7 +915,29 @@ async function decryptAddressPassphrase({ token, signature, userPrivateKey, user
   return String(decrypted.data);
 }
 
-function buildSharedParts({
+export function formatVcalWithTzid(date, timezone) {
+  if (!timezone || timezone === "UTC") {
+    return { key: "DTSTART", value: formatVcalUtc(date) };
+  }
+  // Format as local time with TZID parameter
+  const asDate = date instanceof Date ? date : new Date(date);
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  });
+  const parts = formatter.formatToParts(asDate);
+  const get = (type) => parts.find((p) => p.type === type)?.value || "00";
+  const local = `${get("year")}${get("month")}${get("day")}T${get("hour")}${get("minute")}${get("second")}`;
+  return { key: `DTSTART;TZID=${timezone}`, value: local };
+}
+
+export function buildSharedParts({
   uid,
   sequence,
   organizerEmail,
@@ -943,18 +948,24 @@ function buildSharedParts({
   location,
   recurrence,
   createdDate,
+  timezone,
 }) {
   const now = new Date();
   const dtstamp = formatVcalUtc(now);
   const created = formatVcalUtc(createdDate || now);
-  const dtstart = formatVcalUtc(startDate);
-  const dtend = formatVcalUtc(endDate);
+
+  const dtstartFormatted = timezone && timezone !== "UTC"
+    ? formatVcalWithTzid(startDate, timezone)
+    : { key: "DTSTART", value: formatVcalUtc(startDate) };
+  const dtendFormatted = timezone && timezone !== "UTC"
+    ? { key: dtstartFormatted.key.replace("DTSTART", "DTEND"), value: formatVcalWithTzid(endDate, timezone).value }
+    : { key: "DTEND", value: formatVcalUtc(endDate) };
 
   const signedProperties = [
     ["UID", uid],
     ["DTSTAMP", dtstamp],
-    ["DTSTART", dtstart],
-    ["DTEND", dtend],
+    [dtstartFormatted.key, dtstartFormatted.value],
+    [dtendFormatted.key, dtendFormatted.value],
     ["ORGANIZER", `MAILTO:${organizerEmail}`],
     ["SEQUENCE", String(sequence)],
   ];
@@ -982,6 +993,54 @@ function buildSharedParts({
   return {
     signedPart: buildVcalendarVevent(signedProperties),
     encryptedPart: buildVcalendarVevent(encryptedProperties),
+  };
+}
+
+export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent }) {
+  return {
+    MemberID: memberId,
+    Events: [
+      {
+        Overwrite: 0,
+        Event: {
+          Permissions: 3,
+          IsOrganizer: 1,
+          SharedKeyPacket: sharedKeyPacket,
+          SharedEventContent: sharedEventContent,
+          Notifications: null,
+          Color: null,
+        },
+      },
+    ],
+  };
+}
+
+export function buildUpdateSyncRequestBody({
+  memberId,
+  eventId,
+  sharedEventContent,
+  notifications,
+  color,
+  scope = "series",
+  occurrenceStart = null,
+}) {
+  return {
+    MemberID: memberId,
+    Events: [
+      {
+        ID: eventId,
+        Event: {
+          Permissions: 3,
+          IsOrganizer: 1,
+          IsBreakingChange: scope === "following" ? 1 : 0,
+          IsPersonalSingleEdit: scope === "single",
+          SharedEventContent: sharedEventContent,
+          Notifications: notifications,
+          Color: color,
+          ...(occurrenceStart ? { RecurrenceID: toUnix(occurrenceStart) } : {}),
+        },
+      },
+    ],
   };
 }
 
