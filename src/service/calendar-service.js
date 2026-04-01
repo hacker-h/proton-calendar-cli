@@ -8,6 +8,7 @@ const ALLOWED_FIELDS = new Set([
   "timezone",
   "location",
   "recurrence",
+  "protected",
 ]);
 
 const MUTATION_SCOPES = new Set(["single", "following", "series"]);
@@ -279,6 +280,11 @@ function validateCreatePayload(payload) {
     throw new ApiError(400, "INVALID_TIME_RANGE", "end must be after start");
   }
 
+  if (payload.protected !== undefined && typeof payload.protected !== "boolean") {
+    throw new ApiError(400, "INVALID_FIELD", "protected must be a boolean");
+  }
+  const protected_ = typeof payload.protected === "boolean" ? payload.protected : false;
+
   return {
     title,
     description: optionalString(payload.description, "description", 0, 4000),
@@ -287,6 +293,7 @@ function validateCreatePayload(payload) {
     timezone,
     location: optionalString(payload.location, "location", 0, 400),
     recurrence: payload.recurrence === undefined ? null : validateRecurrence(payload.recurrence),
+    protected: protected_,
   };
 }
 
@@ -329,6 +336,13 @@ function validatePatchPayload(payload, scope) {
         throw new ApiError(400, "INVALID_SCOPE", "recurrence cannot be changed for scope=single");
       }
       patch.recurrence = value === null ? null : validateRecurrence(value);
+      continue;
+    }
+    if (key === "protected") {
+      if (typeof value !== "boolean") {
+        throw new ApiError(400, "INVALID_FIELD", "protected must be a boolean");
+      }
+      patch.protected = value;
       continue;
     }
   }
@@ -411,6 +425,7 @@ function normalizeEvent(event) {
     end: String(event.end || event.endAt || event.end_time || ""),
     timezone: String(event.timezone || event.tz || "UTC"),
     location: event.location ? String(event.location) : "",
+    protected: typeof event.protected === "boolean" ? event.protected : false,
     recurrence,
     seriesId: seriesId ? String(seriesId) : null,
     occurrenceStart: occurrenceStart ? requireDate(occurrenceStart, "occurrenceStart") : null,

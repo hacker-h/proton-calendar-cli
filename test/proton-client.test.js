@@ -376,7 +376,7 @@ test("buildSharedParts emits TZID timestamps for non-UTC events", () => {
   assert.match(parts.signedPart, /DTEND;TZID=Europe\/Berlin:20260321T123000/);
 });
 
-test("buildCreateSyncRequestBody grants organizer write permissions", () => {
+test("buildCreateSyncRequestBody defaults to SEE permissions when not protected", () => {
   const body = buildCreateSyncRequestBody({
     memberId: "member-1",
     sharedKeyPacket: "packet",
@@ -386,6 +386,18 @@ test("buildCreateSyncRequestBody grants organizer write permissions", () => {
   assert.equal(body.MemberID, "member-1");
   assert.equal(body.Events.length, 1);
   assert.equal(body.Events[0].Overwrite, 0);
+  assert.equal(body.Events[0].Event.Permissions, 1);
+  assert.equal(body.Events[0].Event.IsOrganizer, 0);
+});
+
+test("buildCreateSyncRequestBody grants organizer permissions when protected", () => {
+  const body = buildCreateSyncRequestBody({
+    memberId: "member-1",
+    sharedKeyPacket: "packet",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+    protected: true,
+  });
+
   assert.equal(body.Events[0].Event.Permissions, 3);
   assert.equal(body.Events[0].Event.IsOrganizer, 1);
 });
@@ -409,12 +421,28 @@ test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
     scope: "single",
   });
 
-  assert.equal(followingBody.Events[0].Event.Permissions, 3);
+  assert.equal(followingBody.Events[0].Event.Permissions, 1);
+  assert.equal(followingBody.Events[0].Event.IsOrganizer, 0);
   assert.equal(followingBody.Events[0].Event.IsBreakingChange, 1);
   assert.equal(followingBody.Events[0].Event.IsPersonalSingleEdit, false);
   assert.equal(followingBody.Events[0].Event.RecurrenceID, 1774087200);
   assert.equal(singleBody.Events[0].Event.IsBreakingChange, 0);
   assert.equal(singleBody.Events[0].Event.IsPersonalSingleEdit, true);
+});
+
+test("buildUpdateSyncRequestBody grants organizer permissions when protected", () => {
+  const body = buildUpdateSyncRequestBody({
+    memberId: "member-1",
+    eventId: "event-1",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+    notifications: null,
+    color: null,
+    scope: "series",
+    protected: true,
+  });
+
+  assert.equal(body.Events[0].Event.Permissions, 3);
+  assert.equal(body.Events[0].Event.IsOrganizer, 1);
 });
 
 function jsonResponse(status, payload, headers = []) {

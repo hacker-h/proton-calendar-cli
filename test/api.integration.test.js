@@ -448,6 +448,141 @@ test("validates recurrence constraints and scope requirements", async () => {
   }
 });
 
+test("POST without protected defaults to protected: false", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "No protected field",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.protected, false);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("POST with protected: false returns protected: false", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Explicit unprotected",
+      start: "2026-03-10T11:00:00.000Z",
+      end: "2026-03-10T11:30:00.000Z",
+      timezone: "UTC",
+      protected: false,
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.protected, false);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("POST with protected: true returns protected: true", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Protected event",
+      start: "2026-03-10T12:00:00.000Z",
+      end: "2026-03-10T12:30:00.000Z",
+      timezone: "UTC",
+      protected: true,
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.protected, true);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("POST with protected as string rejects with 400 INVALID_FIELD", async () => {
+  const setup = await createFixture();
+  try {
+    const result = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad protected type",
+      start: "2026-03-10T13:00:00.000Z",
+      end: "2026-03-10T13:30:00.000Z",
+      timezone: "UTC",
+      protected: "false",
+    });
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error.code, "INVALID_FIELD");
+  } finally {
+    await setup.close();
+  }
+});
+
+test("POST with protected as number rejects with 400 INVALID_FIELD", async () => {
+  const setup = await createFixture();
+  try {
+    const result = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad protected type",
+      start: "2026-03-10T14:00:00.000Z",
+      end: "2026-03-10T14:30:00.000Z",
+      timezone: "UTC",
+      protected: 0,
+    });
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error.code, "INVALID_FIELD");
+  } finally {
+    await setup.close();
+  }
+});
+
+test("PATCH with protected: true updates event to protected", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Patchable event",
+      start: "2026-03-10T15:00:00.000Z",
+      end: "2026-03-10T15:30:00.000Z",
+      timezone: "UTC",
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.protected, false);
+
+    const eventId = created.body.data.id;
+    const patched = await apiRequest(setup, "PATCH", `/v1/events/${encodeURIComponent(eventId)}`, {
+      protected: true,
+    });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.data.protected, true);
+
+    const patchedFalse = await apiRequest(setup, "PATCH", `/v1/events/${encodeURIComponent(eventId)}`, {
+      protected: false,
+    });
+    assert.equal(patchedFalse.status, 200);
+    assert.equal(patchedFalse.body.data.protected, false);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("PATCH with protected as string rejects with 400 INVALID_FIELD", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Patch validation",
+      start: "2026-03-10T16:00:00.000Z",
+      end: "2026-03-10T16:30:00.000Z",
+      timezone: "UTC",
+    });
+    assert.equal(created.status, 201);
+
+    const eventId = created.body.data.id;
+    const result = await apiRequest(setup, "PATCH", `/v1/events/${encodeURIComponent(eventId)}`, {
+      protected: "true",
+    });
+    assert.equal(result.status, 400);
+    assert.equal(result.body.error.code, "INVALID_FIELD");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reloads cookie bundle automatically after auth failure", async () => {
   const setup = await createFixture({ initialSessionCookie: "expired-cookie" });
   try {
@@ -641,6 +776,7 @@ function createMockProtonClient(options) {
         end: event.end,
         timezone: event.timezone,
         location: event.location || "",
+        protected: event.protected ?? false,
         recurrence: cloneRecurrence(event.recurrence),
         seriesId: null,
         occurrenceStart: null,
@@ -686,6 +822,7 @@ function createMockProtonClient(options) {
             end: new Date(Date.parse(targetOccurrence) + durationMs).toISOString(),
             timezone: existing.timezone,
             location: existing.location,
+            protected: existing.protected ?? false,
             recurrence: null,
             seriesId: eventId,
             occurrenceStart: targetOccurrence,
@@ -734,6 +871,7 @@ function createMockProtonClient(options) {
           end,
           timezone: patch.timezone ?? existing.timezone,
           location: patch.location ?? existing.location,
+          protected: patch.protected ?? existing.protected ?? false,
           recurrence: cloneRecurrence(patch.recurrence ?? priorRecurrence),
           seriesId: null,
           occurrenceStart: null,
@@ -837,6 +975,9 @@ function applyPatch(event, patch) {
 
   if (patch.recurrence !== undefined) {
     updated.recurrence = cloneRecurrence(patch.recurrence);
+  }
+  if (patch.protected !== undefined) {
+    updated.protected = patch.protected;
   }
 
   return updated;

@@ -355,6 +355,7 @@ Event fields currently supported by API and CLI:
 - `end` (ISO datetime)
 - `timezone`
 - `recurrence` object with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
+- `protected` (boolean, default: `false` — set to `true` to prevent other shared-calendar members from editing)
 
 ## Implemented Features
 

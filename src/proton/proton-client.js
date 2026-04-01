@@ -5,6 +5,14 @@ import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const DEFAULT_APP_VERSION = "web-calendar@5.0.101.3";
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
+const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
+  SEE: 1,
+  INVITE: 2,
+  SEE_AND_INVITE: 3,
+  EDIT: 4,
+  DELETE: 8,
+});
+const PROTON_IS_ORGANIZER = 1;
 
 export class ProtonCalendarClient {
   constructor(options) {
@@ -138,6 +146,7 @@ export class ProtonCalendarClient {
       sharedEventContent,
       personalKeyPacket: toBase64(personalKeyPacket),
       calendarEventContent,
+      protected: event.protected,
     });
 
     const response = await this.#requestJSON(
@@ -206,6 +215,7 @@ export class ProtonCalendarClient {
     });
     const calendarEventContent = await this.#encodeCalendarEventContent(context, merged.uid, personalSessionKey);
 
+    const effectiveProtected = typeof patch.protected === "boolean" ? patch.protected : (existing.IsOrganizer === 1);
     const body = buildUpdateSyncRequestBody({
       memberId: context.memberId,
       eventId,
@@ -216,6 +226,7 @@ export class ProtonCalendarClient {
       color: existing.Color || null,
       scope,
       occurrenceStart,
+      protected: effectiveProtected,
     });
 
     const response = await this.#requestJSON(
@@ -312,6 +323,7 @@ export class ProtonCalendarClient {
       updatedAt: rawEvent.ModifyTime ? new Date(rawEvent.ModifyTime * 1000).toISOString() : null,
       uid: rawEvent.UID || null,
       sequence: decoded.sequence || 0,
+      protected: rawEvent.IsOrganizer === 1,
     };
   }
 
@@ -1061,15 +1073,17 @@ export function buildSharedParts({
   };
 }
 
-export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, personalKeyPacket, calendarEventContent }) {
+export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, personalKeyPacket, calendarEventContent, protected: isProtected = false }) {
+  const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
+  const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
   return {
     MemberID: memberId,
     Events: [
       {
         Overwrite: 0,
         Event: {
-          Permissions: 3,
-          IsOrganizer: 1,
+          Permissions: permissions,
+          IsOrganizer: isOrganizer,
           SharedKeyPacket: sharedKeyPacket,
           SharedEventContent: sharedEventContent,
           ...(personalKeyPacket ? { CalendarKeyPacket: personalKeyPacket } : {}),
@@ -1092,15 +1106,18 @@ export function buildUpdateSyncRequestBody({
   color,
   scope = "series",
   occurrenceStart = null,
+  protected: isProtected = false,
 }) {
+  const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
+  const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
   return {
     MemberID: memberId,
     Events: [
       {
         ID: eventId,
         Event: {
-          Permissions: 3,
-          IsOrganizer: 1,
+          Permissions: permissions,
+          IsOrganizer: isOrganizer,
           IsBreakingChange: scope === "following" ? 1 : 0,
           IsPersonalSingleEdit: scope === "single",
           SharedEventContent: sharedEventContent,
