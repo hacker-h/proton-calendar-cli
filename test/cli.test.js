@@ -399,6 +399,125 @@ test("ls explicit date range overrides shortcut", async () => {
   assert.equal(requests[0].searchParams.get("end"), "2026-08-01T00:00:00.000Z");
 });
 
+test("ls --protected filters to protected events only", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--protected"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "A", protected: true },
+            { id: "evt-2", title: "B", protected: false },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events.length, 1);
+  assert.equal(payload.data.events[0].id, "evt-1");
+  assert.equal(payload.data.events[0].protected, true);
+});
+
+test("ls --unprotected filters to unprotected events only", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--unprotected"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "A", protected: true },
+            { id: "evt-2", title: "B", protected: false },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events.length, 1);
+  assert.equal(payload.data.events[0].id, "evt-2");
+  assert.equal(payload.data.events[0].protected, false);
+});
+
+test("ls --protected and --unprotected together throws INVALID_ARGS", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--protected", "--unprotected"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, { data: { events: [], nextCursor: null } });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+});
+
+test("ls -o table includes protected column", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "-o", "table"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [{ id: "evt-1", title: "A", start: "2026-03-11T10:00:00.000Z", end: "2026-03-11T11:00:00.000Z", location: "", protected: true }],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const output = stdout.value();
+  assert.ok(output.includes("protected"), "header should include 'protected'");
+  assert.ok(output.includes("yes"), "row should include 'yes' for protected event");
+});
+
 test("edit sends differential patch and clear fields", async () => {
   const requests = [];
   const stdout = createWriter();

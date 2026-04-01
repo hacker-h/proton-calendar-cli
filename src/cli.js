@@ -21,7 +21,7 @@ const HELP_TEXT = `pc - Proton Calendar CLI
 Usage:
   pc login [options]
   pc doctor auth [options]
-  pc ls [w|w+|w++|m|y|all] [args]
+  pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [args]
   pc new <field=value...>
   pc edit <eventId> <field=value...> [--clear FIELD]
   pc rm <eventId>
@@ -33,6 +33,8 @@ Examples:
   pc ls w+
   pc ls m 7 2026
   pc ls --from 2026-07-01 --to 2026-07-31
+  pc ls --protected
+  pc ls --unprotected
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
   pc edit evt-1 title="Updated" --clear description
   pc edit evt-1 --scope single --at 2026-03-12T09:00:00Z location="Room B"
@@ -56,6 +58,10 @@ Login options:
 Doctor options:
   --cookie-bundle <path>  Cookie bundle path to inspect
   --proton-base-url <url> Proton base URL to probe
+
+List options:
+  --protected         Show only protected events
+  --unprotected       Show only unprotected events
 
 Local config JSON (default: secrets/pc-cli.json):
   { "apiBaseUrl": "http://127.0.0.1:8787", "apiToken": "replace-me" }
@@ -1045,12 +1051,17 @@ async function runListCommand(args, context) {
 
   const outputEvents = parsed.maxResults === null ? events : events.slice(0, parsed.maxResults);
 
+  const filteredEvents =
+    parsed.protectedFilter === null
+      ? outputEvents
+      : outputEvents.filter((e) => e.protected === parsed.protectedFilter);
+
   return {
     output: parsed.output,
     payload: {
       data: {
-        events: outputEvents,
-        count: outputEvents.length,
+        events: filteredEvents,
+        count: filteredEvents.length,
         range: parsed.range,
         calendarId: parsed.calendarId,
       },
@@ -1155,6 +1166,8 @@ function parseListArgs(args, nowFn) {
     from: null,
     to: null,
     positional: [],
+    sawProtected: false,
+    sawUnprotected: false,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -1195,6 +1208,14 @@ function parseListArgs(args, nowFn) {
       state.maxResults = value;
       continue;
     }
+    if (token === "--protected") {
+      state.sawProtected = true;
+      continue;
+    }
+    if (token === "--unprotected") {
+      state.sawUnprotected = true;
+      continue;
+    }
     if (token.startsWith("-")) {
       throw new CliError("INVALID_ARGS", `Unknown option: ${token}`);
     }
@@ -1205,12 +1226,17 @@ function parseListArgs(args, nowFn) {
     throw new CliError("INVALID_ARGS", "Use either --start/--end or --from/--to, not both");
   }
 
+  if (state.sawProtected && state.sawUnprotected) {
+    throw new CliError("INVALID_ARGS", "Cannot use both --protected and --unprotected");
+  }
+
   return {
     output: normalizeOutput(state.output),
     calendarId: state.calendarId,
     maxResults: state.maxResults,
     pageSize: state.pageSize,
     range: resolveRange(state, nowFn),
+    protectedFilter: state.sawProtected ? true : state.sawUnprotected ? false : null,
   };
 }
 
@@ -1716,10 +1742,10 @@ function writeOutput(stdout, output, payload) {
     return;
   }
 
-  const lines = ["id\tstart\tend\ttitle\tlocation"];
+  const lines = ["id\tstart\tend\ttitle\tlocation\tprotected"];
   for (const event of events) {
     lines.push(
-      `${event.id || ""}\t${event.start || ""}\t${event.end || ""}\t${event.title || ""}\t${event.location || ""}`
+      `${event.id || ""}\t${event.start || ""}\t${event.end || ""}\t${event.title || ""}\t${event.location || ""}\t${event.protected === true ? "yes" : "no"}`
     );
   }
   write(stdout, `${lines.join("\n")}\n`);

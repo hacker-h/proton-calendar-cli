@@ -157,7 +157,7 @@ export PC_CONFIG_PATH="/absolute/path/to/pc-cli.json"
 | --- | --- | --- | --- |
 | `pc login` | Guided browser login + local config generation | `--timeout`, `--poll`, `--profile-dir`, `--chrome-path`, `--target-calendar`, `--cookie-bundle` | `pc login --timeout 900` |
 | `pc doctor auth` | Diagnose whether auth is valid/recoverable | `--cookie-bundle`, `--proton-base-url`, `-o` | `pc doctor auth` |
-| `pc ls` | List events (default: current week) | `w`, `w+`, `w++`, `m`, `y`, `all`, `--from/--to`, `--start/--end`, `-c`, `-o` | `pc ls w++` |
+| `pc ls` | List events (default: current week) | `w`, `w+`, `w++`, `m`, `y`, `all`, `--from/--to`, `--start/--end`, `-c`, `-o`, `--protected`, `--unprotected` | `pc ls w++` |
 | `pc new` | Create event | `title=`, `start=`, `end=`, `timezone=`, `description=`, `location=`, `recurrence.*`, `-c` | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
 | `pc edit` | Differential update (PATCH) | `field=value`, `--patch @file.json`, `--clear description`, `--clear location`, `--scope`, `--at`, `-c` | `pc edit evt-1 title="Updated" --clear description` |
 | `pc rm` | Delete event | `--scope`, `--at`, `-c` | `pc rm evt-series --scope series` |
@@ -187,6 +187,10 @@ pc ls y 2026
 # explicit ranges (date-only or datetime)
 pc ls --from 2026-07-01 --to 2026-07-31
 pc ls --start 2026-07-01T00:00:00Z --end 2026-07-31T23:59:59Z
+
+# filter by protection state
+pc ls --protected
+pc ls --unprotected
 
 # create
 pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
