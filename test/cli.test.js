@@ -518,6 +518,224 @@ test("ls -o table includes protected column", async () => {
   assert.ok(output.includes("yes"), "row should include 'yes' for protected event");
 });
 
+test("ls --title filters by case-insensitive title substring", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--title", "review"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "Design Review" },
+            { id: "evt-2", title: "Sprint Planning" },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-1");
+});
+
+test("ls --description filters by case-insensitive description substring", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--description", "workshop"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "A", description: "Internal workshop prep" },
+            { id: "evt-2", title: "B", description: "Team sync" },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-1");
+});
+
+test("ls --location filters by case-insensitive location substring", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--location", "room a"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "A", location: "Room A - North" },
+            { id: "evt-2", title: "B", location: "Room B" },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-1");
+});
+
+test("ls combines text filters with AND semantics", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--title", "review", "--location", "room b"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "Design Review", location: "Room A" },
+            { id: "evt-2", title: "Design Review", location: "Room B" },
+            { id: "evt-3", title: "Planning", location: "Room B" },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-2");
+});
+
+test("ls applies filters before limit across paginated results", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--title", "review", "--limit", "1"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      requests.push(parsed);
+      const cursor = parsed.searchParams.get("cursor");
+      if (!cursor) {
+        return jsonResponse(200, {
+          data: {
+            events: [{ id: "evt-1", title: "Planning" }],
+            nextCursor: "1",
+          },
+        });
+      }
+
+      return jsonResponse(200, {
+        data: {
+          events: [{ id: "evt-2", title: "Design Review" }],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(requests.length, 2);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-2");
+});
+
+test("ls applies combined protected and text filters before limit across paginated results", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--title", "review", "--protected", "--limit", "1"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      requests.push(parsed);
+      const cursor = parsed.searchParams.get("cursor");
+      if (!cursor) {
+        return jsonResponse(200, {
+          data: {
+            events: [
+              { id: "evt-1", title: "Planning", protected: true },
+              { id: "evt-2", title: "Design Review", protected: false },
+            ],
+            nextCursor: "1",
+          },
+        });
+      }
+
+      return jsonResponse(200, {
+        data: {
+          events: [{ id: "evt-3", title: "Design Review", protected: true }],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(requests.length, 2);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-3");
+});
+
 test("edit sends differential patch and clear fields", async () => {
   const requests = [];
   const stdout = createWriter();

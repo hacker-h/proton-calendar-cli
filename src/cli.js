@@ -21,7 +21,7 @@ const HELP_TEXT = `pc - Proton Calendar CLI
 Usage:
   pc login [options]
   pc doctor auth [options]
-  pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [args]
+  pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
   pc new <field=value...>
   pc edit <eventId> <field=value...> [--clear FIELD]
   pc rm <eventId>
@@ -35,6 +35,9 @@ Examples:
   pc ls --from 2026-07-01 --to 2026-07-31
   pc ls --protected
   pc ls --unprotected
+  pc ls --title review
+  pc ls --description workshop
+  pc ls --location "room a"
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
   pc edit evt-1 title="Updated" --clear description
   pc edit evt-1 --scope single --at 2026-03-12T09:00:00Z location="Room B"
@@ -62,6 +65,9 @@ Doctor options:
 List options:
   --protected         Show only protected events
   --unprotected       Show only unprotected events
+  --title <text>       Show only events whose title contains text (case-insensitive)
+  --description <text> Show only events whose description contains text (case-insensitive)
+  --location <text>    Show only events whose location contains text (case-insensitive)
 
 Local config JSON (default: secrets/pc-cli.json):
   { "apiBaseUrl": "http://127.0.0.1:8787", "apiToken": "replace-me" }
@@ -1041,7 +1047,7 @@ async function runListCommand(args, context) {
     if (!nextCursor) {
       break;
     }
-    if (parsed.maxResults !== null && events.length >= parsed.maxResults) {
+    if (parsed.maxResults !== null && events.filter((event) => matchesListFilters(event, parsed)).length >= parsed.maxResults) {
       break;
     }
 
@@ -1049,19 +1055,15 @@ async function runListCommand(args, context) {
     pages += 1;
   }
 
-  const outputEvents = parsed.maxResults === null ? events : events.slice(0, parsed.maxResults);
-
-  const filteredEvents =
-    parsed.protectedFilter === null
-      ? outputEvents
-      : outputEvents.filter((e) => e.protected === parsed.protectedFilter);
+  const filteredEvents = events.filter((event) => matchesListFilters(event, parsed));
+  const outputEvents = parsed.maxResults === null ? filteredEvents : filteredEvents.slice(0, parsed.maxResults);
 
   return {
     output: parsed.output,
     payload: {
       data: {
-        events: filteredEvents,
-        count: filteredEvents.length,
+        events: outputEvents,
+        count: outputEvents.length,
         range: parsed.range,
         calendarId: parsed.calendarId,
       },
@@ -1168,6 +1170,9 @@ function parseListArgs(args, nowFn) {
     positional: [],
     sawProtected: false,
     sawUnprotected: false,
+    titleFilter: null,
+    descriptionFilter: null,
+    locationFilter: null,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -1216,6 +1221,18 @@ function parseListArgs(args, nowFn) {
       state.sawUnprotected = true;
       continue;
     }
+    if (token === "--title") {
+      state.titleFilter = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--description") {
+      state.descriptionFilter = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--location") {
+      state.locationFilter = requireValue(args, ++i, token);
+      continue;
+    }
     if (token.startsWith("-")) {
       throw new CliError("INVALID_ARGS", `Unknown option: ${token}`);
     }
@@ -1237,7 +1254,36 @@ function parseListArgs(args, nowFn) {
     pageSize: state.pageSize,
     range: resolveRange(state, nowFn),
     protectedFilter: state.sawProtected ? true : state.sawUnprotected ? false : null,
+    titleFilter: normalizeListFilter(state.titleFilter),
+    descriptionFilter: normalizeListFilter(state.descriptionFilter),
+    locationFilter: normalizeListFilter(state.locationFilter),
   };
+}
+
+function matchesListFilters(event, filters) {
+  if (filters.protectedFilter !== null && event?.protected !== filters.protectedFilter) {
+    return false;
+  }
+
+  if (!matchesTextFilter(event?.title, filters.titleFilter)) {
+    return false;
+  }
+  if (!matchesTextFilter(event?.description, filters.descriptionFilter)) {
+    return false;
+  }
+  if (!matchesTextFilter(event?.location, filters.locationFilter)) {
+    return false;
+  }
+
+  return true;
+}
+
+function matchesTextFilter(value, filter) {
+  if (filter === null) {
+    return true;
+  }
+
+  return String(value || "").toLowerCase().includes(filter);
 }
 
 async function parseMutationArgs(args, options = {}) {
@@ -1584,6 +1630,14 @@ function normalizeOutput(raw) {
     throw new CliError("INVALID_ARGS", `Unsupported output format: ${raw}`);
   }
   return value;
+}
+
+function normalizeListFilter(raw) {
+  if (raw === null || raw === undefined) {
+    return null;
+  }
+
+  return String(raw).trim().toLowerCase();
 }
 
 function normalizeScope(raw) {
