@@ -91,6 +91,8 @@ test("login bootstraps cookies and writes local config/env files", async () => {
   const envFile = await readFile(serverEnvPath, "utf8");
   assert.equal(envFile.includes("API_BEARER_TOKEN=\"token-123\""), true);
   assert.equal(envFile.includes("TARGET_CALENDAR_ID=\"cal-1\""), true);
+  assert.equal(envFile.includes("# export PROTON_AUTO_RELOGIN=\"1\""), true);
+  assert.equal(envFile.includes("# export PROTON_RELOGIN_MODE=\"headless\""), true);
 
   const payload = JSON.parse(stdout.value());
   assert.equal(payload.data.apiToken, "token-123");

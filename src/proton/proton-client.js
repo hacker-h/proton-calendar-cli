@@ -32,6 +32,8 @@ export class ProtonCalendarClient {
         mode: options.reloginMode,
         timeoutMs: options.reloginTimeoutMs,
         pollSeconds: options.reloginPollSeconds,
+        cooldownMs: options.reloginCooldownMs,
+        recoveryLockPath: options.recoveryLockPath,
         chromePath: options.chromePath,
         profileDir: options.profileDir,
         loginUrl: options.loginUrl,
@@ -183,7 +185,11 @@ export class ProtonCalendarClient {
       title: patch.title ?? decoded.title ?? "",
       description: patch.description ?? decoded.description ?? "",
       location: patch.location ?? decoded.location ?? "",
-      recurrence: patch.recurrence === undefined ? decoded.recurrence : patch.recurrence,
+      recurrence: resolveUpdateRecurrence({
+        scope,
+        patchRecurrence: patch.recurrence,
+        existingRecurrence: decoded.recurrence,
+      }),
       organizerEmail: context.addressEmail,
       createdDate: decoded.createdDate,
       timezone: patch.timezone ?? String(existing.StartTimezone || "UTC"),
@@ -207,12 +213,6 @@ export class ProtonCalendarClient {
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
     const personalSessionKey = await openpgp.generateSessionKey({ encryptionKeys: context.calendarPublicKey });
-    const personalKeyPacket = await openpgp.encryptSessionKey({
-      encryptionKeys: context.calendarPublicKey,
-      data: personalSessionKey.data,
-      algorithm: personalSessionKey.algorithm,
-      format: "binary",
-    });
     const calendarEventContent = await this.#encodeCalendarEventContent(context, merged.uid, personalSessionKey);
 
     const effectiveProtected = typeof patch.protected === "boolean" ? patch.protected : (existing.IsOrganizer === 1);
@@ -220,7 +220,6 @@ export class ProtonCalendarClient {
       memberId: context.memberId,
       eventId,
       sharedEventContent,
-      personalKeyPacket: toBase64(personalKeyPacket),
       calendarEventContent,
       notifications: existing.Notifications || null,
       color: existing.Color || null,
@@ -1100,7 +1099,6 @@ export function buildUpdateSyncRequestBody({
   memberId,
   eventId,
   sharedEventContent,
-  personalKeyPacket,
   calendarEventContent,
   notifications,
   color,
@@ -1121,7 +1119,6 @@ export function buildUpdateSyncRequestBody({
           IsBreakingChange: scope === "following" ? 1 : 0,
           IsPersonalSingleEdit: scope === "single",
           SharedEventContent: sharedEventContent,
-          ...(personalKeyPacket ? { CalendarKeyPacket: personalKeyPacket } : {}),
           ...(calendarEventContent ? { CalendarEventContent: calendarEventContent } : {}),
           Notifications: notifications,
           Color: color,
@@ -1130,6 +1127,18 @@ export function buildUpdateSyncRequestBody({
       },
     ],
   };
+}
+
+export function resolveUpdateRecurrence({ scope = "series", patchRecurrence, existingRecurrence }) {
+  if (scope === "single") {
+    return null;
+  }
+
+  if (patchRecurrence === undefined) {
+    return existingRecurrence;
+  }
+
+  return patchRecurrence;
 }
 
 function buildVcalendarVevent(properties) {

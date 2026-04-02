@@ -23,6 +23,8 @@ export function loadConfigFromEnv(env = process.env) {
     protonProfileDir: readOptional(env.PROTON_PROFILE_DIR),
     protonReloginTimeoutMs: readNumber(env.PROTON_RELOGIN_TIMEOUT_MS, 120000),
     protonReloginPollSeconds: readNumber(env.PROTON_RELOGIN_POLL_SECONDS, 3),
+    protonReloginCooldownMs: readNonNegativeNumber(env.PROTON_RELOGIN_COOLDOWN_MS, 300000),
+    protonReloginLockPath: readOptional(env.PROTON_RELOGIN_LOCK_PATH),
     protonReloginUrl: readOptional(env.PROTON_RELOGIN_URL) || "https://calendar.proton.me/u/0",
   };
 }
@@ -79,6 +81,14 @@ function readCsv(value) {
 function readNumber(value, fallback) {
   const num = Number(value);
   if (Number.isFinite(num) && num > 0) {
+    return num;
+  }
+  return fallback;
+}
+
+function readNonNegativeNumber(value, fallback) {
+  const num = Number(value);
+  if (Number.isFinite(num) && num >= 0) {
     return num;
   }
   return fallback;

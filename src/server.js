@@ -23,6 +23,8 @@ export function createApiServer(config, options = {}) {
       reloginMode: config.protonReloginMode,
       reloginTimeoutMs: config.protonReloginTimeoutMs,
       reloginPollSeconds: config.protonReloginPollSeconds,
+      reloginCooldownMs: config.protonReloginCooldownMs,
+      recoveryLockPath: config.protonReloginLockPath,
       chromePath: config.protonChromePath,
       profileDir: config.protonProfileDir,
       loginUrl: config.protonReloginUrl,

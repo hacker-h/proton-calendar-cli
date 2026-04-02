@@ -850,6 +850,15 @@ async function writeServerEnv(filePath, values) {
     `export PC_API_BASE_URL=${quoteEnv(values.apiBaseUrl)}`,
     `export PC_API_TOKEN=${quoteEnv(values.apiToken)}`,
     "",
+    "# Optional unattended auth recovery (leave disabled unless you need runtime relogin):",
+    "# export PROTON_AUTO_RELOGIN=\"1\"",
+    "# export PROTON_RELOGIN_MODE=\"headless\"",
+    "# export PROTON_RELOGIN_TIMEOUT_MS=\"120000\"",
+    "# export PROTON_RELOGIN_POLL_SECONDS=\"3\"",
+    "# export PROTON_RELOGIN_COOLDOWN_MS=\"300000\"",
+    `# export PROTON_RELOGIN_LOCK_PATH=${quoteEnv(`${values.cookieBundlePath}.relogin.lock`)}`,
+    "# export PROTON_RELOGIN_URL=\"https://calendar.proton.me/u/0\"",
+    "",
   ];
 
   await mkdir(path.dirname(filePath), { recursive: true });

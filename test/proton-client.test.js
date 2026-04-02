@@ -5,6 +5,7 @@ import {
   buildSharedParts,
   buildUpdateSyncRequestBody,
   ProtonCalendarClient,
+  resolveUpdateRecurrence,
 } from "../src/proton/proton-client.js";
 
 test("authStatus uses UID candidate, cookies, and Proton headers", async () => {
@@ -403,6 +404,14 @@ test("buildCreateSyncRequestBody grants organizer permissions when protected", (
 });
 
 test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
+  const seriesBody = buildUpdateSyncRequestBody({
+    memberId: "member-1",
+    eventId: "event-1",
+    sharedEventContent: [{ Type: 2, Data: "signed" }],
+    notifications: null,
+    color: null,
+    scope: "series",
+  });
   const followingBody = buildUpdateSyncRequestBody({
     memberId: "member-1",
     eventId: "event-1",
@@ -419,15 +428,37 @@ test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
     notifications: null,
     color: null,
     scope: "single",
+    occurrenceStart: "2026-03-21T10:00:00.000Z",
   });
 
+  assert.equal(seriesBody.Events[0].Event.IsBreakingChange, 0);
+  assert.equal(seriesBody.Events[0].Event.IsPersonalSingleEdit, false);
+  assert.equal(Object.hasOwn(seriesBody.Events[0].Event, "CalendarKeyPacket"), false);
   assert.equal(followingBody.Events[0].Event.Permissions, 1);
   assert.equal(followingBody.Events[0].Event.IsOrganizer, 0);
   assert.equal(followingBody.Events[0].Event.IsBreakingChange, 1);
   assert.equal(followingBody.Events[0].Event.IsPersonalSingleEdit, false);
   assert.equal(followingBody.Events[0].Event.RecurrenceID, 1774087200);
+  assert.equal(Object.hasOwn(followingBody.Events[0].Event, "CalendarKeyPacket"), false);
   assert.equal(singleBody.Events[0].Event.IsBreakingChange, 0);
   assert.equal(singleBody.Events[0].Event.IsPersonalSingleEdit, true);
+  assert.equal(singleBody.Events[0].Event.RecurrenceID, 1774087200);
+  assert.equal(Object.hasOwn(singleBody.Events[0].Event, "CalendarKeyPacket"), false);
+});
+
+test("resolveUpdateRecurrence drops series rule for single edits", () => {
+  const existingRecurrence = { freq: "DAILY", count: 4 };
+  const patchRecurrence = { freq: "WEEKLY", count: 2 };
+
+  assert.equal(resolveUpdateRecurrence({ scope: "single", existingRecurrence, patchRecurrence }), null);
+  assert.deepEqual(
+    resolveUpdateRecurrence({ scope: "series", existingRecurrence, patchRecurrence: undefined }),
+    existingRecurrence
+  );
+  assert.deepEqual(
+    resolveUpdateRecurrence({ scope: "following", existingRecurrence, patchRecurrence }),
+    patchRecurrence
+  );
 });
 
 test("buildUpdateSyncRequestBody grants organizer permissions when protected", () => {

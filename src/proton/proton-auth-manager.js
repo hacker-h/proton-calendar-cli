@@ -1,8 +1,13 @@
 import { spawn } from "node:child_process";
+import { mkdir, open, readFile, rm } from "node:fs/promises";
 import path from "node:path";
+import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 120000;
+const DEFAULT_COOLDOWN_MS = 300000;
+const DEFAULT_LOCK_POLL_MS = 1000;
+const DEFAULT_STALE_LOCK_GRACE_MS = 30000;
 
 export class ProtonAuthManager {
   constructor(options = {}) {
@@ -19,6 +24,11 @@ export class ProtonAuthManager {
       options.bootstrapScriptPath || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/bootstrap-proton-cookies.mjs");
     this.bootstrapRunner = options.bootstrapRunner || ((runOptions) => runBootstrapScript(this.nodePath, this.bootstrapScriptPath, runOptions));
     this.debugAuth = Boolean(options.debugAuth);
+    this.cooldownMs = readNonNegativeNumber(options.cooldownMs, DEFAULT_COOLDOWN_MS);
+    this.lockPollMs = readPositiveNumber(options.lockPollMs, DEFAULT_LOCK_POLL_MS);
+    this.now = options.now || (() => Date.now());
+    this.recoveryLockPath = resolveRecoveryLockPath(options.recoveryLockPath, this.sessionStore);
+    this.recoveryStatePath = resolveRecoveryStatePath(options.recoveryStatePath, this.sessionStore);
     this.inFlightRecovery = null;
   }
 
@@ -31,7 +41,7 @@ export class ProtonAuthManager {
       return this.inFlightRecovery;
     }
 
-    const recovery = this.#recoverOnce(options).finally(() => {
+    const recovery = this.#recoverWithGuards(options).finally(() => {
       if (this.inFlightRecovery === recovery) {
         this.inFlightRecovery = null;
       }
@@ -39,6 +49,64 @@ export class ProtonAuthManager {
 
     this.inFlightRecovery = recovery;
     return recovery;
+  }
+
+  async #recoverWithGuards(options) {
+    const cooldown = await this.#readCooldownState();
+    if (cooldown.active) {
+      this.#authLog("Skipping relogin during cooldown window", {
+        remainingMs: cooldown.remainingMs,
+        reason: options.reason || null,
+      });
+      return false;
+    }
+
+    const lock = await acquireRecoveryLock({
+      lockPath: this.recoveryLockPath,
+      timeoutMs: this.timeoutMs,
+      pollMs: this.lockPollMs,
+      staleMs: Math.max(this.timeoutMs + DEFAULT_STALE_LOCK_GRACE_MS, 60000),
+      now: this.now,
+    });
+
+    if (!lock.acquired) {
+      if (!lock.released) {
+        this.#authLog("Timed out waiting for relogin lock", {
+          lockPath: this.recoveryLockPath,
+        });
+        return false;
+      }
+
+      const postWaitCooldown = await this.#readCooldownState();
+      if (postWaitCooldown.active) {
+        this.#authLog("External relogin ended in cooldown", {
+          remainingMs: postWaitCooldown.remainingMs,
+          lockPath: this.recoveryLockPath,
+        });
+        return false;
+      }
+
+      if (typeof this.sessionStore.invalidate === "function") {
+        await this.sessionStore.invalidate();
+      }
+
+      this.#authLog("Observed external relogin completion", {
+        lockPath: this.recoveryLockPath,
+      });
+      return true;
+    }
+
+    try {
+      const recovered = await this.#recoverOnce(options);
+      if (recovered) {
+        await clearCooldownState(this.recoveryStatePath);
+      } else {
+        await writeCooldownState(this.recoveryStatePath, this.now());
+      }
+      return recovered;
+    } finally {
+      await lock.release();
+    }
   }
 
   async #recoverOnce(options) {
@@ -76,6 +144,23 @@ export class ProtonAuthManager {
     return false;
   }
 
+  async #readCooldownState() {
+    if (this.cooldownMs <= 0) {
+      return { active: false, remainingMs: 0 };
+    }
+
+    const lastFailureAt = await readCooldownTimestamp(this.recoveryStatePath);
+    if (!Number.isFinite(lastFailureAt)) {
+      return { active: false, remainingMs: 0 };
+    }
+
+    const remainingMs = Math.max(0, lastFailureAt + this.cooldownMs - this.now());
+    return {
+      active: remainingMs > 0,
+      remainingMs,
+    };
+  }
+
   #authLog(message, details = undefined) {
     if (!this.debugAuth) {
       return;
@@ -109,6 +194,158 @@ function buildAttempts(mode) {
     ];
   }
   return [];
+}
+
+function resolveRecoveryLockPath(explicitPath, sessionStore) {
+  if (typeof explicitPath === "string" && explicitPath.trim().length > 0) {
+    return path.resolve(explicitPath.trim());
+  }
+
+  if (sessionStore && typeof sessionStore.getBundlePath === "function") {
+    return `${sessionStore.getBundlePath()}.relogin.lock`;
+  }
+
+  return null;
+}
+
+function resolveRecoveryStatePath(explicitPath, sessionStore) {
+  if (typeof explicitPath === "string" && explicitPath.trim().length > 0) {
+    return path.resolve(explicitPath.trim());
+  }
+
+  if (sessionStore && typeof sessionStore.getBundlePath === "function") {
+    return `${sessionStore.getBundlePath()}.relogin-state.json`;
+  }
+
+  return null;
+}
+
+function readPositiveNumber(value, fallback) {
+  const num = Number(value);
+  if (Number.isFinite(num) && num > 0) {
+    return num;
+  }
+  return fallback;
+}
+
+function readNonNegativeNumber(value, fallback) {
+  const num = Number(value);
+  if (Number.isFinite(num) && num >= 0) {
+    return num;
+  }
+  return fallback;
+}
+
+async function acquireRecoveryLock({ lockPath, timeoutMs, pollMs, staleMs, now }) {
+  if (!lockPath) {
+    return {
+      acquired: true,
+      release: async () => {},
+    };
+  }
+
+  await mkdir(path.dirname(lockPath), { recursive: true });
+
+  while (true) {
+    try {
+      const handle = await open(lockPath, "wx");
+      try {
+        await handle.writeFile(`${JSON.stringify({ pid: process.pid, startedAt: now(), timeoutMs })}\n`);
+      } finally {
+        await handle.close();
+      }
+
+      return {
+        acquired: true,
+        release: async () => {
+          await rm(lockPath, { force: true });
+        },
+      };
+    } catch (error) {
+      if (error?.code !== "EEXIST") {
+        throw error;
+      }
+
+      const startedAt = await readLockStartedAt(lockPath);
+      const stale = !Number.isFinite(startedAt) || now() - startedAt > staleMs;
+      if (stale) {
+        await rm(lockPath, { force: true });
+        continue;
+      }
+
+      return {
+        acquired: false,
+        released: await waitForLockRelease(lockPath, timeoutMs, pollMs),
+      };
+    }
+  }
+}
+
+async function waitForLockRelease(lockPath, timeoutMs, pollMs) {
+  const deadline = Date.now() + timeoutMs;
+  while (Date.now() < deadline) {
+    if (!(await fileExists(lockPath))) {
+      return true;
+    }
+    await delay(pollMs);
+  }
+  return !(await fileExists(lockPath));
+}
+
+async function readLockStartedAt(lockPath) {
+  try {
+    const raw = await readFile(lockPath, "utf8");
+    const parsed = JSON.parse(raw);
+    const startedAt = Number(parsed?.startedAt);
+    return Number.isFinite(startedAt) ? startedAt : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+async function readCooldownTimestamp(statePath) {
+  if (!statePath) {
+    return Number.NaN;
+  }
+
+  try {
+    const raw = await readFile(statePath, "utf8");
+    const parsed = JSON.parse(raw);
+    const lastFailureAt = Number(parsed?.lastFailureAt);
+    return Number.isFinite(lastFailureAt) ? lastFailureAt : Number.NaN;
+  } catch {
+    return Number.NaN;
+  }
+}
+
+async function writeCooldownState(statePath, lastFailureAt) {
+  if (!statePath) {
+    return;
+  }
+
+  await mkdir(path.dirname(statePath), { recursive: true });
+  const handle = await open(statePath, "w");
+  try {
+    await handle.writeFile(`${JSON.stringify({ lastFailureAt })}\n`);
+  } finally {
+    await handle.close();
+  }
+}
+
+async function clearCooldownState(statePath) {
+  if (!statePath) {
+    return;
+  }
+  await rm(statePath, { force: true });
+}
+
+async function fileExists(filePath) {
+  try {
+    await readFile(filePath);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 async function runBootstrapScript(nodePath, scriptPath, options) {

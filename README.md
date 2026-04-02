@@ -297,8 +297,13 @@ export API_BEARER_TOKEN="replace-me"
 export COOKIE_BUNDLE_PATH="secrets/proton-cookies.json"
 export PROTON_BASE_URL="https://calendar.proton.me"
 export PROTON_AUTH_DEBUG="1"
-export PROTON_AUTO_RELOGIN="1"
-export PROTON_RELOGIN_MODE="hybrid"
+export PROTON_AUTO_RELOGIN="0"
+export PROTON_RELOGIN_MODE="headless"
+export PROTON_RELOGIN_TIMEOUT_MS="120000"
+export PROTON_RELOGIN_POLL_SECONDS="3"
+export PROTON_RELOGIN_COOLDOWN_MS="300000"
+export PROTON_RELOGIN_LOCK_PATH="secrets/proton-cookies.json.relogin.lock"
+export PROTON_RELOGIN_URL="https://calendar.proton.me/u/0"
 export PROTON_PROFILE_DIR="$HOME/Library/Application Support/Google/Chrome"
 export PROTON_CHROME_PATH="/Applications/Google Chrome.app/Contents/MacOS/Google Chrome"
 ```
@@ -335,8 +340,21 @@ Notes:
 
 - On `401/403` from Proton, the server attempts cookie refresh via Proton refresh endpoints using the stored `REFRESH-*` cookie payload.
 - Any returned `Set-Cookie` headers are merged into `COOKIE_BUNDLE_PATH` automatically.
-- When `PROTON_AUTO_RELOGIN=1`, the client can also re-bootstrap cookies automatically after refresh failure. `PROTON_RELOGIN_MODE=hybrid` tries headless recovery first, then falls back to a visible Chrome window.
+- `pc login` and the generated `secrets/pc-server.env` bootstrap cookies and API tokens, but they do not enable runtime auto-relogin by default.
+- When `PROTON_AUTO_RELOGIN=1`, the client can also re-bootstrap cookies automatically after refresh failure. For unattended/OpenClaw-style workloads, prefer `PROTON_RELOGIN_MODE=headless`; `hybrid` can fall back to a visible Chrome window.
+- `PROTON_RELOGIN_COOLDOWN_MS` suppresses repeated relogin attempts after a failed bootstrap. The default is `300000` ms (5 minutes).
+- `PROTON_RELOGIN_LOCK_PATH` coordinates relogin across multiple processes sharing the same cookie bundle so only one bootstrap opens Chrome at a time.
 - When `PROTON_AUTH_DEBUG=1`, refresh logs are emitted with cookie change details and expiry timestamps.
+
+### Unattended / OpenClaw guidance
+
+For unattended automation, treat browser login as a bootstrap step and cookie refresh as the normal steady state:
+
+- Run `pnpm pc -- login` interactively once to create `secrets/proton-cookies.json`, `secrets/pc-cli.json`, and `secrets/pc-server.env`.
+- Run `pc doctor auth` before wiring the API into OpenClaw so you know whether refresh already works with the exported cookies.
+- Leave `PROTON_AUTO_RELOGIN=0` unless the worker truly needs runtime browser recovery.
+- If you must enable runtime relogin, use `PROTON_RELOGIN_MODE=headless`, keep `PROTON_RELOGIN_COOLDOWN_MS` set, and point all workers at the same `PROTON_RELOGIN_LOCK_PATH`.
+- Avoid `PROTON_RELOGIN_MODE=hybrid` for unattended agents unless you explicitly want visible Chrome fallback.
 
 Manual verification commands:
 
@@ -376,6 +394,7 @@ Event fields currently supported by API and CLI:
 - Recurring mutation scopes: `single`, `following`, `series`.
 - JSON-first CLI (`pc`) with short defaults for week/month/year views.
 - Differential event edits (`pc edit`) and explicit field clears (`--clear description|location`).
+- Relogin cooldown (`PROTON_RELOGIN_COOLDOWN_MS`) and cross-process lock (`PROTON_RELOGIN_LOCK_PATH`) to prevent repeated browser spawns.
 - Automated tests for API behavior, recurrence/scopes, auth reload flow, and CLI parsing.
 
 ## Not Implemented Features
