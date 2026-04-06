@@ -448,7 +448,7 @@ test("validates recurrence constraints and scope requirements", async () => {
   }
 });
 
-test("POST without protected defaults to protected: false", async () => {
+test("POST without protected defaults to protected: true", async () => {
   const setup = await createFixture();
   try {
     const created = await apiRequest(setup, "POST", "/v1/events", {
@@ -458,7 +458,26 @@ test("POST without protected defaults to protected: false", async () => {
       timezone: "UTC",
     });
     assert.equal(created.status, 201);
-    assert.equal(created.body.data.protected, false);
+    assert.equal(created.body.data.protected, true);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("POST accepts all-day date-only payloads and normalizes them to timezone boundaries", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Holiday",
+      start: "2026-04-09",
+      end: "2026-04-10",
+      timezone: "Europe/Berlin",
+      allDay: true,
+    });
+    assert.equal(created.status, 201);
+    assert.equal(created.body.data.allDay, true);
+    assert.equal(created.body.data.start, "2026-04-08T22:00:00.000Z");
+    assert.equal(created.body.data.end, "2026-04-09T22:00:00.000Z");
   } finally {
     await setup.close();
   }
@@ -542,7 +561,7 @@ test("PATCH with protected: true updates event to protected", async () => {
       timezone: "UTC",
     });
     assert.equal(created.status, 201);
-    assert.equal(created.body.data.protected, false);
+    assert.equal(created.body.data.protected, true);
 
     const eventId = created.body.data.id;
     const patched = await apiRequest(setup, "PATCH", `/v1/events/${encodeURIComponent(eventId)}`, {
@@ -556,6 +575,32 @@ test("PATCH with protected: true updates event to protected", async () => {
     });
     assert.equal(patchedFalse.status, 200);
     assert.equal(patchedFalse.body.data.protected, false);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("PATCH can switch an event to all-day mode", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Timed event",
+      start: "2026-04-09T09:00:00.000Z",
+      end: "2026-04-09T10:00:00.000Z",
+      timezone: "Europe/Berlin",
+    });
+
+    const updated = await apiRequest(setup, "PATCH", `/v1/events/${encodeURIComponent(created.body.data.id)}`, {
+      start: "2026-04-09",
+      end: "2026-04-10",
+      timezone: "Europe/Berlin",
+      allDay: true,
+    });
+
+    assert.equal(updated.status, 200);
+    assert.equal(updated.body.data.allDay, true);
+    assert.equal(updated.body.data.start, "2026-04-08T22:00:00.000Z");
+    assert.equal(updated.body.data.end, "2026-04-09T22:00:00.000Z");
   } finally {
     await setup.close();
   }
@@ -774,6 +819,7 @@ function createMockProtonClient(options) {
         description: event.description || "",
         start: event.start,
         end: event.end,
+        allDay: event.allDay ?? false,
         timezone: event.timezone,
         location: event.location || "",
         protected: event.protected ?? false,
@@ -971,6 +1017,9 @@ function applyPatch(event, patch) {
   if (patch.start !== undefined && patch.end !== undefined) {
     updated.start = patch.start;
     updated.end = patch.end;
+  }
+  if (patch.allDay !== undefined) {
+    updated.allDay = patch.allDay;
   }
 
   if (patch.recurrence !== undefined) {

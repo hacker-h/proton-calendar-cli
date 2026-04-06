@@ -5,6 +5,7 @@ const ALLOWED_FIELDS = new Set([
   "description",
   "start",
   "end",
+  "allDay",
   "timezone",
   "location",
   "recurrence",
@@ -273,8 +274,9 @@ function validateCreatePayload(payload) {
 
   const title = requireString(payload.title, "title", 1, 200);
   const timezone = requireString(payload.timezone, "timezone", 1, 100);
-  const start = requireDate(payload.start, "start");
-  const end = requireDate(payload.end, "end");
+  const allDay = readBoolean(payload.allDay, "allDay", false);
+  const start = requireDate(payload.start, "start", { allDay, timezone });
+  const end = requireDate(payload.end, "end", { allDay, timezone });
 
   if (Date.parse(end) <= Date.parse(start)) {
     throw new ApiError(400, "INVALID_TIME_RANGE", "end must be after start");
@@ -283,13 +285,14 @@ function validateCreatePayload(payload) {
   if (payload.protected !== undefined && typeof payload.protected !== "boolean") {
     throw new ApiError(400, "INVALID_FIELD", "protected must be a boolean");
   }
-  const protected_ = typeof payload.protected === "boolean" ? payload.protected : false;
+  const protected_ = typeof payload.protected === "boolean" ? payload.protected : true;
 
   return {
     title,
     description: optionalString(payload.description, "description", 0, 4000),
     start,
     end,
+    allDay,
     timezone,
     location: optionalString(payload.location, "location", 0, 400),
     recurrence: payload.recurrence === undefined ? null : validateRecurrence(payload.recurrence),
@@ -303,6 +306,8 @@ function validatePatchPayload(payload, scope) {
   }
 
   const patch = {};
+  const patchTimezone = payload.timezone === undefined ? undefined : requireString(payload.timezone, "timezone", 1, 100);
+  const patchAllDay = payload.allDay === undefined ? undefined : readBoolean(payload.allDay, "allDay", false);
   for (const [key, value] of Object.entries(payload)) {
     if (!ALLOWED_FIELDS.has(key) && key !== "calendarId") {
       throw new ApiError(400, "INVALID_FIELD", `Unsupported field: ${key}`);
@@ -312,7 +317,10 @@ function validatePatchPayload(payload, scope) {
     }
 
     if (key === "start" || key === "end") {
-      patch[key] = requireDate(value, key);
+      patch[key] = requireDate(value, key, {
+        allDay: patchAllDay === true,
+        timezone: patchTimezone || "UTC",
+      });
       continue;
     }
     if (key === "title") {
@@ -320,7 +328,7 @@ function validatePatchPayload(payload, scope) {
       continue;
     }
     if (key === "timezone") {
-      patch[key] = requireString(value, key, 1, 100);
+      patch[key] = patchTimezone;
       continue;
     }
     if (key === "description") {
@@ -343,6 +351,10 @@ function validatePatchPayload(payload, scope) {
         throw new ApiError(400, "INVALID_FIELD", "protected must be a boolean");
       }
       patch.protected = value;
+      continue;
+    }
+    if (key === "allDay") {
+      patch.allDay = patchAllDay;
       continue;
     }
   }
@@ -423,6 +435,7 @@ function normalizeEvent(event) {
     description: event.description ? String(event.description) : "",
     start: String(event.start || event.startAt || event.start_time || ""),
     end: String(event.end || event.endAt || event.end_time || ""),
+    allDay: Boolean(event.allDay ?? event.isAllDay ?? false),
     timezone: String(event.timezone || event.tz || "UTC"),
     location: event.location ? String(event.location) : "",
     protected: typeof event.protected === "boolean" ? event.protected : false,
@@ -825,15 +838,65 @@ function optionalString(value, field, minLen, maxLen) {
   return requireString(value, field, minLen, maxLen);
 }
 
-function requireDate(value, field) {
+function requireDate(value, field, options = {}) {
   if (typeof value !== "string") {
     throw new ApiError(400, "INVALID_PAYLOAD", `${field} must be an ISO date-time string`);
   }
+
+  if (options.allDay && isDateOnlyString(value)) {
+    return parseDateOnlyInTimeZone(value, options.timezone || "UTC");
+  }
+
   const parsed = Date.parse(value);
   if (Number.isNaN(parsed)) {
     throw new ApiError(400, "INVALID_PAYLOAD", `${field} must be an ISO date-time string`);
   }
   return new Date(parsed).toISOString();
+}
+
+function readBoolean(value, field, fallback) {
+  if (value === undefined) {
+    return fallback;
+  }
+  if (typeof value !== "boolean") {
+    throw new ApiError(400, "INVALID_FIELD", `${field} must be a boolean`);
+  }
+  return value;
+}
+
+function isDateOnlyString(value) {
+  return typeof value === "string" && /^\d{4}-\d{2}-\d{2}$/.test(value.trim());
+}
+
+function parseDateOnlyInTimeZone(value, timezone) {
+  const [year, month, day] = String(value).trim().split("-").map(Number);
+  const utcGuess = new Date(Date.UTC(year, month - 1, day, 0, 0, 0));
+  const resolved = new Date(utcGuess.getTime() - getTimeZoneOffsetMs(utcGuess, timezone));
+  return resolved.toISOString();
+}
+
+function getTimeZoneOffsetMs(date, timezone) {
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(date);
+  const get = (type) => Number(parts.find((part) => part.type === type)?.value || 0);
+  const asUtc = Date.UTC(
+    get("year"),
+    get("month") - 1,
+    get("day"),
+    get("hour"),
+    get("minute"),
+    get("second")
+  );
+  return asUtc - date.getTime();
 }
 
 function normalizeIdempotencyKey(value) {
