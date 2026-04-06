@@ -114,6 +114,7 @@ export class ProtonCalendarClient {
       organizerEmail: context.addressEmail,
       startDate,
       endDate,
+      allDay: Boolean(event.allDay),
       title: event.title,
       description: event.description || "",
       location: event.location || "",
@@ -182,6 +183,7 @@ export class ProtonCalendarClient {
       sequence: (decoded.sequence || 0) + 1,
       startDate: patch.start ? new Date(patch.start) : new Date(existing.StartTime * 1000),
       endDate: patch.end ? new Date(patch.end) : new Date(existing.EndTime * 1000),
+      allDay: typeof patch.allDay === "boolean" ? patch.allDay : Boolean(decoded.allDay),
       title: patch.title ?? decoded.title ?? "",
       description: patch.description ?? decoded.description ?? "",
       location: patch.location ?? decoded.location ?? "",
@@ -201,6 +203,7 @@ export class ProtonCalendarClient {
       organizerEmail: merged.organizerEmail,
       startDate: merged.startDate,
       endDate: merged.endDate,
+      allDay: merged.allDay,
       title: merged.title,
       description: merged.description,
       location: merged.location,
@@ -212,8 +215,13 @@ export class ProtonCalendarClient {
     const sessionKey = await this.#decryptSharedSessionKey(context, existing.SharedKeyPacket);
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
-    const personalSessionKey = await openpgp.generateSessionKey({ encryptionKeys: context.calendarPublicKey });
-    const calendarEventContent = await this.#encodeCalendarEventContent(context, merged.uid, personalSessionKey);
+    const personalSessionKey = await resolveUpdateCalendarSessionKey({
+      existingCalendarKeyPacket: existing.CalendarKeyPacket,
+      decryptExistingSessionKey: async (calendarKeyPacketBase64) => this.#decryptCalendarSessionKey(context, calendarKeyPacketBase64),
+    });
+    const calendarEventContent = personalSessionKey
+      ? await this.#encodeCalendarEventContent(context, merged.uid, personalSessionKey)
+      : undefined;
 
     const effectiveProtected = typeof patch.protected === "boolean" ? patch.protected : (existing.IsOrganizer === 1);
     const body = buildUpdateSyncRequestBody({
@@ -311,6 +319,7 @@ export class ProtonCalendarClient {
       description: decoded.description || "",
       start: new Date(Number(rawEvent.StartTime || 0) * 1000).toISOString(),
       end: new Date(Number(rawEvent.EndTime || 0) * 1000).toISOString(),
+      allDay: Boolean(decoded.allDay),
       timezone: String(rawEvent.StartTimezone || "UTC"),
       location: decoded.location || "",
       recurrence: decoded.recurrence,
@@ -334,13 +343,15 @@ export class ProtonCalendarClient {
     const signedProps = signedCard?.Data ? parseVeventProperties(signedCard.Data) : {};
 
     let encryptedProps = {};
+    let encryptedText = "";
     if (encryptedCard?.Data && rawEvent?.SharedKeyPacket) {
       const sessionKey = await this.#decryptSharedSessionKey(context, rawEvent.SharedKeyPacket);
-      const encryptedText = await decryptSymmetricMessageUtf8(encryptedCard.Data, sessionKey);
+      encryptedText = await decryptSymmetricMessageUtf8(encryptedCard.Data, sessionKey);
       encryptedProps = parseVeventProperties(encryptedText);
     }
 
     return {
+      allDay: hasDateValueProperty(signedCard?.Data || "", "DTSTART") || hasDateValueProperty(encryptedText, "DTSTART"),
       sequence: readInteger(signedProps.SEQUENCE, 0),
       createdDate: encryptedProps.CREATED ? parseVcalUtc(encryptedProps.CREATED) : null,
       title: unescapeIcsText(encryptedProps.SUMMARY || ""),
@@ -427,14 +438,30 @@ export class ProtonCalendarClient {
   }
 
   async #decryptSharedSessionKey(context, sharedKeyPacketBase64) {
-    const message = await openpgp.readMessage({ binaryMessage: fromBase64(sharedKeyPacketBase64) });
+    return this.#decryptSessionKeyPacket({
+      privateKey: context.calendarPrivateKey,
+      packetBase64: sharedKeyPacketBase64,
+      errorMessage: "Unable to decrypt event shared session key",
+    });
+  }
+
+  async #decryptCalendarSessionKey(context, calendarKeyPacketBase64) {
+    return this.#decryptSessionKeyPacket({
+      privateKey: context.calendarPrivateKey,
+      packetBase64: calendarKeyPacketBase64,
+      errorMessage: "Unable to decrypt event calendar session key",
+    });
+  }
+
+  async #decryptSessionKeyPacket({ privateKey, packetBase64, errorMessage }) {
+    const message = await openpgp.readMessage({ binaryMessage: fromBase64(packetBase64) });
     const keys = await openpgp.decryptSessionKeys({
       message,
-      decryptionKeys: context.calendarPrivateKey,
+      decryptionKeys: privateKey,
     });
 
     if (!Array.isArray(keys) || keys.length === 0) {
-      throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Unable to decrypt event shared session key");
+      throw new ApiError(502, "UPSTREAM_INVALID_EVENT", errorMessage);
     }
 
     return keys[0];
@@ -1019,6 +1046,7 @@ export function buildSharedParts({
   organizerEmail,
   startDate,
   endDate,
+  allDay = false,
   title,
   description,
   location,
@@ -1030,12 +1058,17 @@ export function buildSharedParts({
   const dtstamp = formatVcalUtc(now);
   const created = formatVcalUtc(createdDate || now);
 
-  const dtstartFormatted = timezone && timezone !== "UTC"
-    ? formatVcalWithTzid(startDate, timezone)
-    : { key: "DTSTART", value: formatVcalUtc(startDate) };
-  const dtendFormatted = timezone && timezone !== "UTC"
-    ? { key: dtstartFormatted.key.replace("DTSTART", "DTEND"), value: formatVcalWithTzid(endDate, timezone).value }
-    : { key: "DTEND", value: formatVcalUtc(endDate) };
+  const effectiveTimezone = timezone || "UTC";
+  const dtstartFormatted = allDay
+    ? { key: "DTSTART;VALUE=DATE", value: formatVcalDate(startDate, effectiveTimezone) }
+    : effectiveTimezone !== "UTC"
+      ? formatVcalWithTzid(startDate, effectiveTimezone)
+      : { key: "DTSTART", value: formatVcalUtc(startDate) };
+  const dtendFormatted = allDay
+    ? { key: "DTEND;VALUE=DATE", value: formatAllDayEndDate(endDate, effectiveTimezone) }
+    : effectiveTimezone !== "UTC"
+      ? { key: dtstartFormatted.key.replace("DTSTART", "DTEND"), value: formatVcalWithTzid(endDate, effectiveTimezone).value }
+      : { key: "DTEND", value: formatVcalUtc(endDate) };
 
   const signedProperties = [
     ["UID", uid],
@@ -1072,7 +1105,7 @@ export function buildSharedParts({
   };
 }
 
-export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, personalKeyPacket, calendarEventContent, protected: isProtected = false }) {
+export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, personalKeyPacket, calendarEventContent, protected: isProtected = true }) {
   const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
   const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
   return {
@@ -1104,7 +1137,7 @@ export function buildUpdateSyncRequestBody({
   color,
   scope = "series",
   occurrenceStart = null,
-  protected: isProtected = false,
+  protected: isProtected = true,
 }) {
   const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
   const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
@@ -1127,6 +1160,17 @@ export function buildUpdateSyncRequestBody({
       },
     ],
   };
+}
+
+export async function resolveUpdateCalendarSessionKey({
+  existingCalendarKeyPacket,
+  decryptExistingSessionKey,
+}) {
+  if (existingCalendarKeyPacket) {
+    return decryptExistingSessionKey(existingCalendarKeyPacket);
+  }
+
+  return null;
 }
 
 export function resolveUpdateRecurrence({ scope = "series", patchRecurrence, existingRecurrence }) {
@@ -1153,9 +1197,9 @@ function buildVcalendarVevent(properties) {
   return lines.join("\r\n");
 }
 
-function parseVeventProperties(ics) {
+function unfoldIcsLines(ics) {
   if (!ics || typeof ics !== "string") {
-    return {};
+    return [];
   }
 
   const unfolded = [];
@@ -1169,6 +1213,15 @@ function parseVeventProperties(ics) {
     }
     unfolded.push(rawLine);
   }
+  return unfolded;
+}
+
+function parseVeventProperties(ics) {
+  if (!ics || typeof ics !== "string") {
+    return {};
+  }
+
+  const unfolded = unfoldIcsLines(ics);
 
   const beginIndex = unfolded.findIndex((line) => line === "BEGIN:VEVENT");
   const endIndex = unfolded.findIndex((line) => line === "END:VEVENT");
@@ -1191,6 +1244,28 @@ function parseVeventProperties(ics) {
   return props;
 }
 
+function hasDateValueProperty(ics, propertyName) {
+  const prefix = propertyName.toUpperCase();
+  for (const line of unfoldIcsLines(ics)) {
+    const separator = line.indexOf(":");
+    if (separator <= 0) {
+      continue;
+    }
+    const left = line.slice(0, separator).toUpperCase();
+    if (left === prefix) {
+      return false;
+    }
+    if (!left.startsWith(`${prefix};`)) {
+      continue;
+    }
+    const params = left.slice(prefix.length + 1);
+    if (/(^|;)VALUE=DATE($|;)/.test(params)) {
+      return true;
+    }
+  }
+  return false;
+}
+
 async function decryptSymmetricMessageUtf8(encryptedBase64, sessionKey) {
   const message = await openpgp.readMessage({ binaryMessage: fromBase64(encryptedBase64) });
   const result = await openpgp.decrypt({
@@ -1205,6 +1280,51 @@ function formatVcalUtc(date) {
   const asDate = date instanceof Date ? date : new Date(date);
   const iso = asDate.toISOString();
   return iso.replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+}
+
+function formatVcalDate(date, timezone = "UTC") {
+  const parts = getDateTimeParts(date, timezone);
+  return `${parts.year}${parts.month}${parts.day}`;
+}
+
+function formatAllDayEndDate(date, timezone) {
+  const stamp = formatVcalDate(date, timezone);
+  return isMidnightInTimeZone(date, timezone) ? stamp : incrementDateStamp(stamp);
+}
+
+function incrementDateStamp(stamp) {
+  const parsed = new Date(`${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T00:00:00.000Z`);
+  parsed.setUTCDate(parsed.getUTCDate() + 1);
+  return parsed.toISOString().slice(0, 10).replace(/-/g, "");
+}
+
+function isMidnightInTimeZone(date, timezone) {
+  const parts = getDateTimeParts(date, timezone);
+  return parts.hour === "00" && parts.minute === "00" && parts.second === "00";
+}
+
+function getDateTimeParts(date, timezone) {
+  const asDate = date instanceof Date ? date : new Date(date);
+  const formatter = new Intl.DateTimeFormat("en-CA", {
+    timeZone: timezone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hourCycle: "h23",
+  });
+  const parts = formatter.formatToParts(asDate);
+  const get = (type) => parts.find((part) => part.type === type)?.value || "00";
+  return {
+    year: get("year"),
+    month: get("month"),
+    day: get("day"),
+    hour: get("hour"),
+    minute: get("minute"),
+    second: get("second"),
+  };
 }
 
 function parseVcalUtc(raw) {

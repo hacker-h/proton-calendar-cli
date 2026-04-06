@@ -5,6 +5,7 @@ import {
   buildSharedParts,
   buildUpdateSyncRequestBody,
   ProtonCalendarClient,
+  resolveUpdateCalendarSessionKey,
   resolveUpdateRecurrence,
 } from "../src/proton/proton-client.js";
 
@@ -377,7 +378,28 @@ test("buildSharedParts emits TZID timestamps for non-UTC events", () => {
   assert.match(parts.signedPart, /DTEND;TZID=Europe\/Berlin:20260321T123000/);
 });
 
-test("buildCreateSyncRequestBody defaults to SEE permissions when not protected", () => {
+test("buildSharedParts emits VALUE=DATE for all-day events", () => {
+  const parts = buildSharedParts({
+    uid: "event-3",
+    sequence: 1,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-04-08T22:00:00.000Z"),
+    endDate: new Date("2026-04-09T22:00:00.000Z"),
+    allDay: true,
+    title: "All-day event",
+    description: "",
+    location: "",
+    recurrence: null,
+    createdDate: new Date("2026-04-08T21:00:00.000Z"),
+    timezone: "Europe/Berlin",
+  });
+
+  assert.match(parts.signedPart, /DTSTART;VALUE=DATE:20260409/);
+  assert.match(parts.signedPart, /DTEND;VALUE=DATE:20260410/);
+  assert.doesNotMatch(parts.signedPart, /TZID=/);
+});
+
+test("buildCreateSyncRequestBody defaults to organizer permissions", () => {
   const body = buildCreateSyncRequestBody({
     memberId: "member-1",
     sharedKeyPacket: "packet",
@@ -387,8 +409,9 @@ test("buildCreateSyncRequestBody defaults to SEE permissions when not protected"
   assert.equal(body.MemberID, "member-1");
   assert.equal(body.Events.length, 1);
   assert.equal(body.Events[0].Overwrite, 0);
-  assert.equal(body.Events[0].Event.Permissions, 1);
-  assert.equal(body.Events[0].Event.IsOrganizer, 0);
+  assert.equal(body.Events[0].Event.Permissions, 3);
+  assert.equal(body.Events[0].Event.IsOrganizer, 1);
+  assert.equal(body.Events[0].Event.SharedKeyPacket, "packet");
 });
 
 test("buildCreateSyncRequestBody grants organizer permissions when protected", () => {
@@ -401,13 +424,15 @@ test("buildCreateSyncRequestBody grants organizer permissions when protected", (
 
   assert.equal(body.Events[0].Event.Permissions, 3);
   assert.equal(body.Events[0].Event.IsOrganizer, 1);
+  assert.equal(body.Events[0].Event.SharedKeyPacket, "packet");
 });
 
-test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
+test("buildUpdateSyncRequestBody preserves scoped mutation flags and defaults to organizer ownership", () => {
   const seriesBody = buildUpdateSyncRequestBody({
     memberId: "member-1",
     eventId: "event-1",
     sharedEventContent: [{ Type: 2, Data: "signed" }],
+    calendarEventContent: [{ Type: 3, Data: "encrypted" }],
     notifications: null,
     color: null,
     scope: "series",
@@ -416,6 +441,7 @@ test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
     memberId: "member-1",
     eventId: "event-1",
     sharedEventContent: [{ Type: 2, Data: "signed" }],
+    calendarEventContent: [{ Type: 3, Data: "encrypted" }],
     notifications: null,
     color: null,
     scope: "following",
@@ -425,6 +451,7 @@ test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
     memberId: "member-1",
     eventId: "event-1",
     sharedEventContent: [{ Type: 2, Data: "signed" }],
+    calendarEventContent: [{ Type: 3, Data: "encrypted" }],
     notifications: null,
     color: null,
     scope: "single",
@@ -433,17 +460,45 @@ test("buildUpdateSyncRequestBody preserves scoped mutation flags", () => {
 
   assert.equal(seriesBody.Events[0].Event.IsBreakingChange, 0);
   assert.equal(seriesBody.Events[0].Event.IsPersonalSingleEdit, false);
+  assert.equal(Object.hasOwn(seriesBody.Events[0].Event, "SharedKeyPacket"), false);
   assert.equal(Object.hasOwn(seriesBody.Events[0].Event, "CalendarKeyPacket"), false);
-  assert.equal(followingBody.Events[0].Event.Permissions, 1);
-  assert.equal(followingBody.Events[0].Event.IsOrganizer, 0);
+  assert.equal(followingBody.Events[0].Event.Permissions, 3);
+  assert.equal(followingBody.Events[0].Event.IsOrganizer, 1);
   assert.equal(followingBody.Events[0].Event.IsBreakingChange, 1);
   assert.equal(followingBody.Events[0].Event.IsPersonalSingleEdit, false);
   assert.equal(followingBody.Events[0].Event.RecurrenceID, 1774087200);
+  assert.equal(Object.hasOwn(followingBody.Events[0].Event, "SharedKeyPacket"), false);
   assert.equal(Object.hasOwn(followingBody.Events[0].Event, "CalendarKeyPacket"), false);
   assert.equal(singleBody.Events[0].Event.IsBreakingChange, 0);
   assert.equal(singleBody.Events[0].Event.IsPersonalSingleEdit, true);
   assert.equal(singleBody.Events[0].Event.RecurrenceID, 1774087200);
+  assert.equal(Object.hasOwn(singleBody.Events[0].Event, "SharedKeyPacket"), false);
   assert.equal(Object.hasOwn(singleBody.Events[0].Event, "CalendarKeyPacket"), false);
+});
+
+test("resolveUpdateCalendarSessionKey reuses existing calendar packet on update", async () => {
+  const decryptedSessionKey = { algorithm: "aes256", data: new Uint8Array([1, 2, 3]) };
+
+  const resolved = await resolveUpdateCalendarSessionKey({
+    existingCalendarKeyPacket: "existing-packet",
+    decryptExistingSessionKey: async (packet) => {
+      assert.equal(packet, "existing-packet");
+      return decryptedSessionKey;
+    },
+  });
+
+  assert.equal(resolved, decryptedSessionKey);
+});
+
+test("resolveUpdateCalendarSessionKey returns null when packet is missing", async () => {
+  const resolved = await resolveUpdateCalendarSessionKey({
+    existingCalendarKeyPacket: null,
+    decryptExistingSessionKey: async () => {
+      throw new Error("decryptExistingSessionKey should not be called without a packet");
+    },
+  });
+
+  assert.equal(resolved, null);
 });
 
 test("resolveUpdateRecurrence drops series rule for single edits", () => {
@@ -466,6 +521,7 @@ test("buildUpdateSyncRequestBody grants organizer permissions when protected", (
     memberId: "member-1",
     eventId: "event-1",
     sharedEventContent: [{ Type: 2, Data: "signed" }],
+    calendarEventContent: [{ Type: 3, Data: "encrypted" }],
     notifications: null,
     color: null,
     scope: "series",
@@ -474,6 +530,8 @@ test("buildUpdateSyncRequestBody grants organizer permissions when protected", (
 
   assert.equal(body.Events[0].Event.Permissions, 3);
   assert.equal(body.Events[0].Event.IsOrganizer, 1);
+  assert.equal(Object.hasOwn(body.Events[0].Event, "SharedKeyPacket"), false);
+  assert.equal(Object.hasOwn(body.Events[0].Event, "CalendarKeyPacket"), false);
 });
 
 function jsonResponse(status, payload, headers = []) {
