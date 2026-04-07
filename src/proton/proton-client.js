@@ -132,23 +132,10 @@ export class ProtonCalendarClient {
 
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
-    // CalendarKeyPacket must be encrypted with the calendar public key (same as SharedKeyPacket).
-    // CalendarEventContent is then encrypted with that same session key.
-    const personalSessionKey = await openpgp.generateSessionKey({ encryptionKeys: context.calendarPublicKey });
-    const personalKeyPacket = await openpgp.encryptSessionKey({
-      encryptionKeys: context.calendarPublicKey,
-      data: personalSessionKey.data,
-      algorithm: personalSessionKey.algorithm,
-      format: "binary",
-    });
-    const calendarEventContent = await this.#encodeCalendarEventContent(context, eventUid, personalSessionKey);
-
     const body = buildCreateSyncRequestBody({
       memberId: context.memberId,
       sharedKeyPacket: toBase64(sharedKeyPacket),
       sharedEventContent,
-      personalKeyPacket: toBase64(personalKeyPacket),
-      calendarEventContent,
       protected: event.protected,
     });
 
@@ -215,20 +202,11 @@ export class ProtonCalendarClient {
     const sessionKey = await this.#decryptSharedSessionKey(context, existing.SharedKeyPacket);
     const sharedEventContent = await this.#encodeSharedEventContent(context, sharedParts, sessionKey);
 
-    const personalSessionKey = await resolveUpdateCalendarSessionKey({
-      existingCalendarKeyPacket: existing.CalendarKeyPacket,
-      decryptExistingSessionKey: async (calendarKeyPacketBase64) => this.#decryptCalendarSessionKey(context, calendarKeyPacketBase64),
-    });
-    const calendarEventContent = personalSessionKey
-      ? await this.#encodeCalendarEventContent(context, merged.uid, personalSessionKey)
-      : undefined;
-
     const effectiveProtected = typeof patch.protected === "boolean" ? patch.protected : (existing.IsOrganizer === 1);
     const body = buildUpdateSyncRequestBody({
       memberId: context.memberId,
       eventId,
       sharedEventContent,
-      calendarEventContent,
       notifications: existing.Notifications || null,
       color: existing.Color || null,
       scope,
@@ -361,47 +339,6 @@ export class ProtonCalendarClient {
     };
   }
 
-  async #encodeCalendarEventContent(context, uid, sessionKey) {
-    // CalendarEventContent uses the same Type 2+3 structure as SharedEventContent.
-    // The "personal" vCal must include UID + DTSTAMP at minimum.
-    const dtstamp = formatVcalUtc(new Date());
-    const signedPart = buildVcalendarVevent([["UID", uid], ["DTSTAMP", dtstamp]]);
-    const encryptedPart = buildVcalendarVevent([["UID", uid], ["DTSTAMP", dtstamp]]);
-
-    const signedSignature = await openpgp.sign({
-      message: await openpgp.createMessage({ text: signedPart }),
-      signingKeys: context.addressPrivateKey,
-      detached: true,
-      format: "armored",
-    });
-
-    const encryptedSignature = await openpgp.sign({
-      message: await openpgp.createMessage({ text: encryptedPart }),
-      signingKeys: context.addressPrivateKey,
-      detached: true,
-      format: "armored",
-    });
-
-    const encryptedBinary = await openpgp.encrypt({
-      message: await openpgp.createMessage({ text: encryptedPart }),
-      sessionKey,
-      format: "binary",
-    });
-
-    return [
-      {
-        Type: 2,
-        Data: signedPart,
-        Signature: signedSignature,
-      },
-      {
-        Type: 3,
-        Data: toBase64(encryptedBinary),
-        Signature: encryptedSignature,
-      },
-    ];
-  }
-
   async #encodeSharedEventContent(context, sharedParts, sessionKey) {
     const signedSignature = await openpgp.sign({
       message: await openpgp.createMessage({ text: sharedParts.signedPart }),
@@ -442,14 +379,6 @@ export class ProtonCalendarClient {
       privateKey: context.calendarPrivateKey,
       packetBase64: sharedKeyPacketBase64,
       errorMessage: "Unable to decrypt event shared session key",
-    });
-  }
-
-  async #decryptCalendarSessionKey(context, calendarKeyPacketBase64) {
-    return this.#decryptSessionKeyPacket({
-      privateKey: context.calendarPrivateKey,
-      packetBase64: calendarKeyPacketBase64,
-      errorMessage: "Unable to decrypt event calendar session key",
     });
   }
 
@@ -1070,12 +999,17 @@ export function buildSharedParts({
       ? { key: dtstartFormatted.key.replace("DTSTART", "DTEND"), value: formatVcalWithTzid(endDate, effectiveTimezone).value }
       : { key: "DTEND", value: formatVcalUtc(endDate) };
 
+  // DO NOT add ORGANIZER here. Proton's UI treats any signed VEVENT with an
+  // ORGANIZER property as an invitation (getEventInformation.ts:
+  // `isInvitation: !!model.organizer`) and blocks edit/move unless the
+  // current user matches the organizer email (getCanEditSharedEventData in
+  // event.ts). Native Proton clients only emit ORGANIZER for events with
+  // real attendees; including it on personal events makes them read-only.
   const signedProperties = [
     ["UID", uid],
     ["DTSTAMP", dtstamp],
     [dtstartFormatted.key, dtstartFormatted.value],
     [dtendFormatted.key, dtendFormatted.value],
-    ["ORGANIZER", `MAILTO:${organizerEmail}`],
     ["SEQUENCE", String(sequence)],
   ];
 
@@ -1105,7 +1039,7 @@ export function buildSharedParts({
   };
 }
 
-export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, personalKeyPacket, calendarEventContent, protected: isProtected = true }) {
+export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, protected: isProtected = true }) {
   const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
   const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
   return {
@@ -1118,8 +1052,6 @@ export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEv
           IsOrganizer: isOrganizer,
           SharedKeyPacket: sharedKeyPacket,
           SharedEventContent: sharedEventContent,
-          ...(personalKeyPacket ? { CalendarKeyPacket: personalKeyPacket } : {}),
-          ...(calendarEventContent ? { CalendarEventContent: calendarEventContent } : {}),
           Notifications: null,
           Color: null,
         },
@@ -1132,7 +1064,6 @@ export function buildUpdateSyncRequestBody({
   memberId,
   eventId,
   sharedEventContent,
-  calendarEventContent,
   notifications,
   color,
   scope = "series",
@@ -1152,7 +1083,6 @@ export function buildUpdateSyncRequestBody({
           IsBreakingChange: scope === "following" ? 1 : 0,
           IsPersonalSingleEdit: scope === "single",
           SharedEventContent: sharedEventContent,
-          ...(calendarEventContent ? { CalendarEventContent: calendarEventContent } : {}),
           Notifications: notifications,
           Color: color,
           ...(occurrenceStart ? { RecurrenceID: toUnix(occurrenceStart) } : {}),
@@ -1160,17 +1090,6 @@ export function buildUpdateSyncRequestBody({
       },
     ],
   };
-}
-
-export async function resolveUpdateCalendarSessionKey({
-  existingCalendarKeyPacket,
-  decryptExistingSessionKey,
-}) {
-  if (existingCalendarKeyPacket) {
-    return decryptExistingSessionKey(existingCalendarKeyPacket);
-  }
-
-  return null;
 }
 
 export function resolveUpdateRecurrence({ scope = "series", patchRecurrence, existingRecurrence }) {
