@@ -415,6 +415,17 @@ Run tests:
 pnpm test
 ```
 
+## git-crypt
+
+This repository uses a dedicated `encrypted/` directory for tracked secrets that should live in git in encrypted form.
+
+- Put shared encrypted files under `encrypted/`.
+- Keep machine-local runtime secrets under `secrets/` instead; that directory is already gitignored.
+- Grant another collaborator access with `git-crypt add-gpg-user <gpg-key-id>`.
+- Unlock encrypted files on a machine with the matching private key via `git-crypt unlock`.
+
+The dedicated directory is intentional: it keeps the encryption boundary obvious and avoids accidentally encrypting normal source, config, or fixture files with patterns that are too broad.
+
 ## GitLab CI
 
 The repository includes a GitLab pipeline with:
