@@ -193,6 +193,59 @@ Notes:
 - Recurring scope values are `single`, `following`, and `series`.
 - `--at <ISO>` is required for `single` and `following` recurrence scope actions.
 
+### Automation CLI Contract
+
+Automation should treat `pc` as a stable JSON command surface. Behavior changes that affect stdout/stderr ownership, JSON envelopes, error fields, exit codes, config precedence, or secret output must be intentional and covered by contract tests.
+
+Output streams:
+
+- Successful machine-readable command output is written to stdout.
+- Error payloads are written to stderr.
+- Progress, diagnostics, browser-bootstrap hints, and debug logs must not be mixed into stdout when JSON output is requested.
+- Human-readable table output is allowed only when the caller explicitly requests `-o table` or `--output table`.
+
+JSON envelopes:
+
+- Success output uses a top-level `{ "data": ... }` object.
+- Error output uses a top-level `{ "error": { "code", "message", "details" } }` object.
+- `error.code` is a stable automation key. `error.message` is for humans and may be clarified without changing the error class.
+- `error.details` is optional and must contain sanitized, JSON-serializable context only.
+
+Exit codes:
+
+| Exit code | Meaning | Typical error codes |
+| --- | --- | --- |
+| `0` | Success | none |
+| `1` | General command failure until narrower codes are implemented | `UNKNOWN_COMMAND`, `INVALID_ARGS`, `CONFIG_ERROR`, `LOGIN_FAILED`, `API_UNREACHABLE`, `API_ERROR`, `INTERNAL_ERROR` |
+| `2` | Validation or usage failure | `UNKNOWN_COMMAND`, `INVALID_ARGS` |
+| `3` | Auth/session failure | `UNAUTHORIZED`, `LOGIN_FAILED`, auth refresh or relogin failures |
+| `4` | Local API unavailable | `API_UNREACHABLE` |
+| `5` | Proton upstream failure | Proton non-2xx responses, refresh failures, upstream timeout classes |
+| `6` | Unsupported or changed private-API state | Proton UI/API drift, captcha, human verification, 2FA-required CI login, unsupported account state |
+
+Current commands return `1` for all failures. New behavior should move toward the narrower codes above without changing JSON error envelopes.
+
+Configuration precedence:
+
+- `PC_API_BASE_URL` overrides `API_BASE_URL`, then `apiBaseUrl` in `PC_CONFIG_PATH`, then the default `http://127.0.0.1:8787`.
+- `PC_API_TOKEN` overrides `API_BEARER_TOKEN`, then `apiToken` in `PC_CONFIG_PATH`.
+- `PC_CONFIG_PATH` selects the local CLI config file and defaults to `secrets/pc-cli.json`.
+- Command-line options override environment defaults for command-specific paths such as `--cookie-bundle`, `--pc-config`, and `--server-env`.
+
+Automation flags:
+
+- Use `--output json` (or `-o json`) for CI/CD, scripts, and agent callers. JSON is the default, but explicit flags make scripts resilient to future human-friendly defaults.
+- `--quiet` is reserved for suppressing nonessential stderr diagnostics while preserving JSON errors.
+- `--verbose` is reserved for sanitized troubleshooting details on stderr only.
+- Noninteractive automation must fail fast instead of prompting. Commands that need browser login should use explicit CI/bootstrap flows and stable error codes for human verification, captcha, 2FA, credential failure, or Proton UI drift.
+
+Secret-output rules:
+
+- Passwords, cookie values, refresh tokens, session blobs, UID values, bearer tokens, and raw Proton payloads must not appear in normal stdout, stderr, logs, or artifacts.
+- A command may reveal a newly generated local token only behind an explicit, documented opt-in flag intended for setup, and that output must still use the standard JSON envelope.
+- Sanitized identifiers may be replaced with placeholders such as `<uid>` in examples and docs.
+- `PROTON_AUTH_DEBUG=1` must remain sanitized and limited to cookie names, expiry timestamps, status classes, and counts.
+
 ### Example Output
 
 `pc doctor auth` example (`status=refresh_recovered` means access cookie was expired but refresh still works):
