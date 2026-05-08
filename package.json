@@ -1,0 +1,55 @@
+{
+  "name": "proton-calendar-cli",
+  "version": "0.1.0",
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "src/",
+    "scripts/bootstrap-proton-cookies.mjs",
+    "README.md",
+    "LICENSE",
+    "AGENTS.md"
+  ],
+  "bin": {
+    "pc": "src/cli.js"
+  },
+  "scripts": {
+    "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
+    "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
+    "ci:local": "pnpm test:unit && pnpm run smoke:package",
+    "pc": "node src/cli.js",
+    "smoke:package": "node scripts/ci/package-smoke.mjs",
+    "start": "node src/index.js",
+    "sync:github-secrets": "node scripts/ci/sync-github-secrets.mjs",
+    "test": "node --test \"test/*.test.js\"",
+    "test:unit": "node --test \"test/*.test.js\"",
+    "test:live": "node --test \"test/live/**/*.test.js\"",
+    "test:live:api": "node --test \"test/live/api.live.test.js\"",
+    "test:live:cli": "node --test \"test/live/cli.live.test.js\""
+  },
+  "devDependencies": {
+    "playwright": "^1.54.2"
+  },
+  "dependencies": {
+    "@steipete/sweet-cookie": "^0.1.0",
+    "openpgp": "^6.3.0"
+  },
+  "description": "Unofficial Proton Calendar JSON API and CLI for personal automation",
+  "keywords": [
+    "proton",
+    "calendar",
+    "cli",
+    "automation"
+  ],
+  "homepage": "https://github.com/hacker-h/proton-calendar-cli#readme",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/hacker-h/proton-calendar-cli.git"
+  },
+  "bugs": {
+    "url": "https://github.com/hacker-h/proton-calendar-cli/issues"
+  },
+  "engines": {
+    "node": ">=22"
+  }
+}

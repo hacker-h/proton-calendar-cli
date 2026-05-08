@@ -1,0 +1,36 @@
+image: node:22-bookworm
+
+stages:
+  - test
+
+variables:
+  PNPM_STORE_DIR: .pnpm-store
+
+cache:
+  key:
+    files:
+      - pnpm-lock.yaml
+  paths:
+    - .pnpm-store/
+
+.pnpm_setup:
+  before_script:
+    - command -v pnpm >/dev/null 2>&1 || (command -v corepack >/dev/null 2>&1 && corepack enable || npm install -g pnpm@10)
+    - pnpm config set store-dir "$PNPM_STORE_DIR"
+    - pnpm install --frozen-lockfile
+
+test:unit:
+  extends: .pnpm_setup
+  stage: test
+  script:
+    - pnpm run ci:local
+  artifacts:
+    when: always
+    expire_in: 1 day
+    paths:
+      - junit.xml
+    reports:
+      junit: junit.xml
+  after_script:
+    - |
+      node --test --test-reporter=junit --test-reporter-destination=junit.xml "test/*.test.js" >/dev/null 2>&1 || true

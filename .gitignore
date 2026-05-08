@@ -1,0 +1,8 @@
+node_modules/
+secrets/
+.tmp/
+.sisyphus/
+.claude/
+.playwright/
+.pnpm-store/
+junit.xml
