@@ -1,3 +1,18 @@
+## [1.0.10](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.9...v1.0.10) (2026-05-09)
+
+
+### Bug Fixes
+
+* cover blank cli validation edges ([0f6d604](https://github.com/hacker-h/proton-calendar-cli/commit/0f6d60490c45373c2c483a61abe40bfdcf5e6d53))
+* reject whitespace-only cli values ([9a3f9bc](https://github.com/hacker-h/proton-calendar-cli/commit/9a3f9bca4ae49e89b18700fc782098b0db2c47e6))
+
+## [1.0.9](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.8...v1.0.9) (2026-05-09)
+
+
+### Bug Fixes
+
+* fold long vevent lines ([fe0d92c](https://github.com/hacker-h/proton-calendar-cli/commit/fe0d92c2ace3b9dfd036a78cdc7c284ff45b42d9))
+
 ## [1.0.8](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.7...v1.0.8) (2026-05-09)
 
 
