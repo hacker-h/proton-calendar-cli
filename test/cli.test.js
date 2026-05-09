@@ -518,7 +518,28 @@ test("new rejects whitespace-only title before API call", async () => {
   assert.equal(exitCode, 1);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
-  assert.equal(payload.error.message, "title is required (title=...) for pc new");
+  assert.equal(payload.error.message, "title cannot be blank");
+});
+
+test("edit rejects whitespace-only title before API call", async () => {
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["edit", "evt-1", "title=   "], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      throw new Error("should not call API");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "title cannot be blank");
 });
 
 test("new trims string assignment values before sending request", async () => {
@@ -529,7 +550,7 @@ test("new trims string assignment values before sending request", async () => {
       "new",
       "title=  Design review  ",
       "description=  Prep notes  ",
-      "location=  Room A  ",
+      "location=  {not-json}  ",
       "start=2026-03-10T10:00:00Z",
       "end=2026-03-10T10:30:00Z",
       "timezone=  UTC  ",
@@ -553,7 +574,7 @@ test("new trims string assignment values before sending request", async () => {
   const body = JSON.parse(String(requests[0].init.body));
   assert.equal(body.title, "Design review");
   assert.equal(body.description, "Prep notes");
-  assert.equal(body.location, "Room A");
+  assert.equal(body.location, "{not-json}");
   assert.equal(body.timezone, "UTC");
 });
 
@@ -605,6 +626,28 @@ test("new sends normal string assignment values unchanged", async () => {
   assert.equal(requests.length, 1);
   const body = JSON.parse(String(requests[0].init.body));
   assert.equal(body.title, "Design review");
+});
+
+test("ls rejects whitespace-only text filter before API call", async () => {
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--title", "   "], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async () => {
+      throw new Error("should not call API");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "--title requires a value");
 });
 
 test("ls -o table includes protected column", async () => {

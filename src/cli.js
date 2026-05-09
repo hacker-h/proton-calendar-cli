@@ -1375,6 +1375,7 @@ async function parseMutationArgs(args, options = {}) {
     patch[field] = "";
   }
 
+  validateStringPatchValues(patch, state.clearFields);
   validateTimezonePatch(patch);
 
   return {
@@ -1497,6 +1498,18 @@ function validateTimezonePatch(patch) {
   }
 }
 
+function validateStringPatchValues(patch, clearFields) {
+  const cleared = new Set(clearFields);
+  for (const field of ["title", "description", "location"]) {
+    if (!Object.hasOwn(patch, field) || cleared.has(field)) {
+      continue;
+    }
+    if (typeof patch[field] === "string" && patch[field].trim() === "") {
+      throw new CliError("INVALID_ARGS", `${field} cannot be blank`);
+    }
+  }
+}
+
 function normalizeClearField(raw) {
   const field = normalizeFieldPath(raw);
   if (!CLEARABLE_FIELDS.has(field)) {
@@ -1524,7 +1537,7 @@ function parseAssignmentValue(raw) {
     try {
       return JSON.parse(trimmed);
     } catch {
-      return value;
+      return trimmed;
     }
   }
   return trimmed;
