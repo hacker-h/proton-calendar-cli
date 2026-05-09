@@ -47,6 +47,34 @@ test("reports auth status and calendar scope configuration", async () => {
   }
 });
 
+test("reports unauthenticated auth status for ApiError AUTH_EXPIRED", async () => {
+  const setup = await createFixture({ initialSessionCookie: "expired-cookie" });
+  try {
+    const status = await setup.api.service.authStatus();
+
+    assert.equal(status.authenticated, false);
+    assert.equal(status.targetCalendarId, setup.proton.primaryCalendarId);
+    assert.deepEqual(status.allowedCalendarIds, [setup.proton.primaryCalendarId]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("rethrows non-ApiError auth-expired-shaped failures unchanged", async () => {
+  const upstreamError = Object.assign(new Error("network unavailable"), {
+    code: "AUTH_EXPIRED",
+  });
+  const setup = await createFixture({ authStatusError: upstreamError });
+  try {
+    await assert.rejects(
+      () => setup.api.service.authStatus(),
+      (error) => error === upstreamError
+    );
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports legacy routes against configured default/target calendar", async () => {
   const setup = await createFixture();
   try {
@@ -663,6 +691,7 @@ async function createFixture(options = {}) {
     sessionStore,
     baseUrl: protonBaseUrl,
     calendarIds,
+    authStatusError: options.authStatusError,
   });
 
   const initialSessionCookie = options.initialSessionCookie || proton.validSessionCookie;
@@ -775,6 +804,9 @@ function createMockProtonClient(options) {
 
   const client = {
     async authStatus() {
+      if (options.authStatusError) {
+        throw options.authStatusError;
+      }
       await assertAuthorized();
       return { ok: true, account: "assistant" };
     },

@@ -1,4 +1,4 @@
-import { ApiError } from "../errors.js";
+import { ApiError, isApiError } from "../errors.js";
 
 const ALLOWED_FIELDS = new Set([
   "title",
@@ -45,7 +45,7 @@ export class CalendarService {
         upstream,
       };
     } catch (error) {
-      if (error.code === "AUTH_EXPIRED") {
+      if (isApiError(error) && error.code === "AUTH_EXPIRED") {
         return {
           authenticated: false,
           targetCalendarId: this.targetCalendarId,
