@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import * as openpgp from "openpgp";
 import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
 import {
   buildCreateSyncRequestBody,
@@ -340,6 +341,46 @@ test("concurrent auth failures share a single relogin attempt", async () => {
   assert.equal(reloginCount, 1);
 });
 
+test("event mutations send idempotency keys to Proton sync requests", async () => {
+  const { client, requests } = await createMutationClientFixture();
+
+  await client.createEvent({
+    calendarId: "cal-1",
+    event: {
+      title: "Create with key",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+    },
+    idempotencyKey: "create-key",
+  });
+
+  await client.updateEvent({
+    calendarId: "cal-1",
+    eventId: "evt-1",
+    patch: { title: "Update with key" },
+    idempotencyKey: "update-key",
+  });
+
+  await client.deleteEvent({
+    calendarId: "cal-1",
+    eventId: "evt-1",
+    idempotencyKey: "delete-key",
+  });
+
+  await client.deleteEvent({
+    calendarId: "cal-1",
+    eventId: "evt-1",
+  });
+
+  assert.deepEqual(
+    requests
+      .filter((request) => request.pathname === "/api/calendar/v1/cal-1/events/sync")
+      .map((request) => request.headers["X-Idempotency-Key"]),
+    ["create-key", "update-key", "delete-key", undefined]
+  );
+});
+
 test("buildSharedParts keeps UTC timestamps for UTC events", () => {
   const parts = buildSharedParts({
     uid: "event-1",
@@ -597,6 +638,93 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+async function createMutationClientFixture() {
+  const requests = [];
+  const addressKey = await openpgp.generateKey({
+    type: "ecc",
+    curve: "curve25519",
+    userIDs: [{ email: "bot@example.com" }],
+    format: "object",
+  });
+  const calendarKey = await openpgp.generateKey({
+    type: "ecc",
+    curve: "curve25519",
+    userIDs: [{ email: "calendar@example.com" }],
+    format: "object",
+  });
+
+  let storedEvent = null;
+  const fetchImpl = async (url, init) => {
+    const parsed = new URL(String(url));
+    const request = {
+      method: init.method,
+      pathname: parsed.pathname,
+      headers: { ...init.headers },
+      body: init.body ? JSON.parse(init.body) : null,
+    };
+    requests.push(request);
+
+    if (request.method === "GET" && parsed.pathname === "/api/calendar/v1/cal-1/events/evt-1") {
+      return jsonResponse(200, { Code: 1000, Event: storedEvent });
+    }
+
+    if (request.method === "PUT" && parsed.pathname === "/api/calendar/v1/cal-1/events/sync") {
+      const syncEvent = request.body.Events[0].Event || {};
+      storedEvent = buildRawSyncEvent(syncEvent, storedEvent);
+      return jsonResponse(200, {
+        Code: 1001,
+        Responses: [{ Response: { Code: 1000, Event: storedEvent } }],
+      });
+    }
+
+    throw new Error(`Unexpected request: ${request.method} ${parsed.pathname}`);
+  };
+
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getCookieHeader() {
+        return "pm-session=valid; pm-auth=valid";
+      },
+    },
+    fetchImpl,
+    maxRetries: 0,
+  });
+  client.cachedUID = "uid-123";
+  client.cachedContext = {
+    uid: "uid-123",
+    calendarId: "cal-1",
+    memberId: "member-1",
+    addressEmail: "bot@example.com",
+    addressPrivateKey: addressKey.privateKey,
+    calendarPrivateKey: calendarKey.privateKey,
+    calendarPublicKey: calendarKey.privateKey.toPublic(),
+  };
+
+  return { client, requests };
+}
+
+function buildRawSyncEvent(syncEvent, previousEvent) {
+  const sharedEvents = syncEvent.SharedEventContent || previousEvent?.SharedEvents || [];
+  return {
+    ...previousEvent,
+    ...syncEvent,
+    ID: "evt-1",
+    CalendarID: "cal-1",
+    UID: "evt-1@example.com",
+    StartTime: 1773136800,
+    EndTime: 1773138600,
+    StartTimezone: "UTC",
+    EndTimezone: "UTC",
+    CreateTime: 1773000000,
+    ModifyTime: 1773000001,
+    Notifications: null,
+    Color: null,
+    SharedKeyPacket: syncEvent.SharedKeyPacket || previousEvent?.SharedKeyPacket,
+    SharedEvents: sharedEvents,
+  };
 }
 
 function assertPhysicalLinesAtMost75Octets(ics) {
