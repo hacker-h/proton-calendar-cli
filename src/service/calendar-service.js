@@ -528,25 +528,30 @@ function normalizeOccurrenceStart(raw, scope) {
 
 function parseOccurrenceEventId(eventId) {
   const marker = "::";
-  const index = eventId.indexOf(marker);
-  if (index <= 0) {
+  const index = eventId.lastIndexOf(marker);
+  if (index === -1) {
     return null;
   }
 
   const base = eventId.slice(0, index);
   const encodedOccurrence = eventId.slice(index + marker.length);
   if (!base || !encodedOccurrence) {
-    return null;
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
   }
 
   let decoded;
   try {
     decoded = decodeURIComponent(encodedOccurrence);
   } catch {
-    return null;
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
   }
 
-  const occurrenceStart = requireDate(decoded, "occurrenceStart");
+  let occurrenceStart;
+  try {
+    occurrenceStart = requireDate(decoded, "occurrenceStart");
+  } catch {
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
+  }
   return {
     eventId: base,
     occurrenceStart,
