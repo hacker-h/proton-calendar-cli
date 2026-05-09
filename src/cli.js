@@ -3,10 +3,11 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PROTON_APP_VERSION } from "./constants.js";
+import { assertSafeSecretFile, chmodOwnerOnly } from "./secret-file-safety.js";
 import { CookieSessionStore } from "./session/cookie-session-store.js";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
@@ -22,6 +23,7 @@ const HELP_TEXT = `pc - Proton Calendar CLI
 
 Usage:
   pc login [options]
+  pc logout [options]
   pc doctor auth [options]
   pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
   pc new <field=value...> [--tz TIMEZONE]
@@ -30,6 +32,7 @@ Usage:
 
 Examples:
   pc login
+  pc logout
   pc doctor auth
   pc ls
   pc ls w+
@@ -59,6 +62,11 @@ Login options:
   --profile-dir <path>    Chrome profile directory (forwarded)
   --chrome-path <path>    Chrome executable path (forwarded)
   --cookie-bundle <path>  Cookie bundle output path
+
+Logout options:
+  --cookie-bundle <path>  Cookie bundle path to remove
+  --pc-config <path>      Local CLI config path to remove
+  --server-env <path>     Server env path to remove
 
 Doctor options:
   --cookie-bundle <path>  Cookie bundle path to inspect
@@ -113,6 +121,12 @@ export async function runPcCli(argv, options = {}) {
         bootstrapRunner: options.bootstrapRunner,
         generateToken: options.generateToken,
       });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
+    if (command === "logout") {
+      const result = await runLogoutCommand(rest, { env });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
@@ -343,6 +357,46 @@ async function runDoctorCommand(args, context) {
   };
 }
 
+async function runLogoutCommand(args, context) {
+  const parsed = parseLogoutArgs(args, context.env);
+  const targets = [
+    { kind: "cliConfig", path: parsed.pcConfigPath },
+    { kind: "serverEnv", path: parsed.serverEnvPath },
+    { kind: "cookieBundle", path: parsed.cookieBundlePath },
+    { kind: "reloginLock", path: `${parsed.cookieBundlePath}.relogin.lock` },
+    { kind: "reloginState", path: `${parsed.cookieBundlePath}.relogin-state.json` },
+  ];
+
+  const removed = [];
+  const missing = [];
+  const failed = [];
+
+  for (const target of targets) {
+    try {
+      await unlink(target.path);
+      removed.push(target);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        missing.push(target);
+        continue;
+      }
+      failed.push({ ...target, code: error?.code || "UNLINK_FAILED", message: error?.message || "Unable to remove file" });
+    }
+  }
+
+  return {
+    output: parsed.output,
+    payload: {
+      data: {
+        logout: failed.length === 0 ? "ok" : "partial",
+        removed,
+        missing,
+        failed,
+      },
+    },
+  };
+}
+
 function parseDoctorArgs(args, env) {
   const state = {
     output: "json",
@@ -526,6 +580,44 @@ function parseLoginArgs(args, env) {
   };
 }
 
+function parseLogoutArgs(args, env) {
+  const state = {
+    output: "json",
+    cookieBundlePath: path.resolve(env.COOKIE_BUNDLE_PATH || DEFAULT_COOKIE_BUNDLE_PATH),
+    pcConfigPath: path.resolve(env.PC_CONFIG_PATH || DEFAULT_LOCAL_CONFIG_PATH),
+    serverEnvPath: path.resolve(env.PC_SERVER_ENV_PATH || DEFAULT_SERVER_ENV_PATH),
+  };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+
+    if (token === "-o" || token === "--output") {
+      state.output = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--cookie-bundle") {
+      state.cookieBundlePath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    if (token === "--pc-config") {
+      state.pcConfigPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    if (token === "--server-env") {
+      state.serverEnvPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    throw new CliError("INVALID_ARGS", `Unknown logout option: ${token}`);
+  }
+
+  return {
+    output: normalizeOutput(state.output),
+    cookieBundlePath: state.cookieBundlePath,
+    pcConfigPath: state.pcConfigPath,
+    serverEnvPath: state.serverEnvPath,
+  };
+}
+
 async function runBootstrapScript(bootstrapArgs) {
   const cliPath = fileURLToPath(import.meta.url);
   const projectRoot = path.resolve(path.dirname(cliPath), "..");
@@ -549,6 +641,17 @@ async function runBootstrapScript(bootstrapArgs) {
 }
 
 async function readCookieBundle(cookieBundlePath) {
+  try {
+    await assertSafeSecretFile(cookieBundlePath, {
+      createError: (message, details) => new CliError("SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw error;
+    }
+    throw new CliError("LOGIN_FAILED", `Cookie bundle file not found: ${cookieBundlePath}`);
+  }
+
   let content;
   try {
     content = await readFile(cookieBundlePath, "utf8");
@@ -840,6 +943,7 @@ function selectTargetCalendarId(calendars, requestedCalendarId) {
 async function writeJson(filePath, payload) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+  await chmodOwnerOnly(filePath);
 }
 
 async function writeServerEnv(filePath, values) {
@@ -864,6 +968,7 @@ async function writeServerEnv(filePath, values) {
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, lines.join("\n"), { mode: 0o600 });
+  await chmodOwnerOnly(filePath);
 }
 
 function quoteEnv(value) {
@@ -1722,6 +1827,21 @@ function readToken(env, localConfig) {
 
 async function readLocalConfig(env) {
   const configPath = env.PC_CONFIG_PATH || DEFAULT_LOCAL_CONFIG_PATH;
+
+  try {
+    const fileStat = await assertSafeSecretFile(configPath, {
+      required: false,
+      createError: (message, details) => new CliError("SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
+    if (!fileStat) {
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw error;
+    }
+    throw new CliError("CONFIG_ERROR", `Unable to read local config file: ${configPath}`);
+  }
 
   let content;
   try {
