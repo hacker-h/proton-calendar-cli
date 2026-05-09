@@ -30,7 +30,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11.0.8
           run_install: false
 
       - name: Set up Node.js
@@ -41,6 +41,9 @@ jobs:
 
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
+
+      - name: Check toolchain metadata
+        run: pnpm run check:toolchain
 
       - name: Run unit tests with JUnit report
         run: pnpm run test:unit:junit
@@ -57,6 +60,53 @@ jobs:
       - name: Run package/bin smoke
         run: pnpm run smoke:package
 
+  dependency-health:
+    name: Scheduled dependency health
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@v6
+        with:
+          version: 11.0.8
+          run_install: false
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v6
+        with:
+          node-version: 24
+          cache: pnpm
+
+      - name: Install dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Check toolchain metadata
+        run: pnpm run check:toolchain
+
+      - name: Install and smoke Playwright browser
+        run: pnpm run check:browser
+
+      - name: Capture outdated dependency report
+        run: |
+          mkdir -p reports
+          pnpm outdated --format=json > reports/outdated-dependencies.json || true
+          if [ ! -s reports/outdated-dependencies.json ]; then
+            printf '{}\n' > reports/outdated-dependencies.json
+          fi
+
+      - name: Upload dependency health report
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-health-report
+          path: reports/outdated-dependencies.json
+          if-no-files-found: error
+          retention-days: 14
+
   live-proton-canary:
     name: Optional live Proton canary
     runs-on: ubuntu-latest
@@ -70,7 +120,7 @@ jobs:
       - name: Set up pnpm
         uses: pnpm/action-setup@v6
         with:
-          version: 10
+          version: 11.0.8
           run_install: false
 
       - name: Set up Node.js
