@@ -192,7 +192,7 @@ pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
-Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout and verifies `pc --help` plus a JSON config-error path from the installed tarball.
+Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package.
 
 The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, and then runs live tests. Pull requests do not require these secrets or the live canary.
 
