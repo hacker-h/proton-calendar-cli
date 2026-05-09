@@ -1,3 +1,10 @@
+## [1.0.7](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.6...v1.0.7) (2026-05-09)
+
+
+### Bug Fixes
+
+* cap recurrence candidate iteration ([8f3c841](https://github.com/hacker-h/proton-calendar-cli/commit/8f3c841d371148c4a3a2ca743b231f05e976c19f))
+
 ## [1.0.6](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.5...v1.0.6) (2026-05-09)
 
 
