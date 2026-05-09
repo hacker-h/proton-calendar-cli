@@ -2,6 +2,7 @@
 
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { DEFAULT_PROTON_APP_VERSION } from "../../src/constants.js";
 
@@ -11,20 +12,49 @@ const DEFAULT_TIMEOUT_MS = 180000;
 const DEFAULT_POST_LOGIN_TIMEOUT_MS = 120000;
 const PROTON_HOSTS = ["https://calendar.proton.me", "https://account.proton.me"];
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2), process.env);
-  const browser = await chromium.launch({
-    headless: true,
-    args: ["--disable-dev-shm-usage"],
-  });
+const EXIT_CODES = {
+  CONFIG_MISSING: 10,
+  BROWSER_SETUP: 20,
+  NETWORK_TIMEOUT: 30,
+  BAD_CREDENTIALS: 40,
+  INTERACTIVE_CHALLENGE: 50,
+  UI_DRIFT: 60,
+  SESSION_INVALID: 70,
+  SANITIZATION_BLOCKED: 80,
+};
 
-  const context = await browser.newContext({
-    ignoreHTTPSErrors: false,
-    viewport: { width: 1440, height: 1100 },
-  });
-  const page = await context.newPage();
+const ERROR_MESSAGES = {
+  CONFIG_MISSING: "Required Proton CI login configuration is missing.",
+  BROWSER_SETUP: "Unable to launch the CI browser for Proton login.",
+  NETWORK_TIMEOUT: "Timed out while waiting for Proton login or Calendar readiness.",
+  BAD_CREDENTIALS: "Proton rejected the configured credentials.",
+  INTERACTIVE_CHALLENGE: "Proton requested an interactive login challenge that CI cannot complete.",
+  UI_DRIFT: "Proton login UI did not match the expected CI selectors.",
+  SESSION_INVALID: "The exported Proton browser session did not pass validation.",
+  SANITIZATION_BLOCKED: "Bootstrap diagnostics failed the sanitizer.",
+};
+
+async function main() {
+  let options;
+  let browser;
+  let context;
+  let page;
 
   try {
+    options = parseArgs(process.argv.slice(2), process.env);
+    browser = await chromium.launch({
+      headless: true,
+      args: ["--disable-dev-shm-usage"],
+    }).catch((error) => {
+      throw new BootstrapError("BROWSER_SETUP", "launch", {}, error);
+    });
+
+    context = await browser.newContext({
+      ignoreHTTPSErrors: false,
+      viewport: { width: 1440, height: 1100 },
+    });
+    page = await context.newPage();
+
     await loginWithPassword(page, options);
     await waitForAuthenticatedCalendar(page, options.postLoginTimeoutMs);
 
@@ -33,19 +63,14 @@ async function main() {
     await writeFile(options.outputFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
     await chmod(options.outputFile, 0o600);
 
-    console.log(JSON.stringify({
-      data: {
-        outputFile: options.outputFile,
-        uidCandidates: payload.uidCandidates,
-        authProbe: payload.authProbe,
-        defaultCalendarId: payload.authProbe?.defaultCalendarId || null,
-        cookieCount: payload.cookies.length,
-        persistedSessionCount: Object.keys(payload.persistedSessions || {}).length,
-      },
-    }, null, 2));
+    const summary = sanitizeSuccessSummary(payload, options);
+    assertSafeDiagnostics(summary);
+    console.log(JSON.stringify({ data: summary }, null, 2));
+  } catch (error) {
+    handleFatalError(error, page);
   } finally {
-    await context.close();
-    await browser.close();
+    await context?.close().catch(() => {});
+    await browser?.close().catch(() => {});
   }
 }
 
@@ -86,10 +111,10 @@ function parseArgs(argv, env) {
   }
 
   if (!options.username) {
-    throw new Error("PROTON_USERNAME is required");
+    throw new BootstrapError("CONFIG_MISSING", "config", { missing: "PROTON_USERNAME" });
   }
   if (!options.password) {
-    throw new Error("PROTON_PASSWORD is required");
+    throw new BootstrapError("CONFIG_MISSING", "config", { missing: "PROTON_PASSWORD" });
   }
 
   return options;
@@ -124,20 +149,20 @@ async function waitForAuthenticatedCalendar(page, timeoutMs) {
       return;
     }
 
-    const challengeVisible = await isAnyVisible(page, MFA_SELECTORS);
-    if (challengeVisible) {
-      throw new Error("Proton requested additional verification; CI needs password-only login for this account");
+    const challenge = await detectChallenge(page);
+    if (challenge) {
+      throw new BootstrapError("INTERACTIVE_CHALLENGE", "calendar-ready", { challenge });
     }
 
     const errorText = await readFirstVisibleText(page, LOGIN_ERROR_SELECTORS);
     if (errorText) {
-      throw new Error(`Proton login failed: ${errorText}`);
+      throw classifyLoginError(errorText, "calendar-ready");
     }
 
     await page.waitForTimeout(2000);
   }
 
-  throw new Error(`Timed out waiting for authenticated Proton Calendar session (last URL: ${page.url() || "unknown"})`);
+  throw new BootstrapError("NETWORK_TIMEOUT", "calendar-ready", { url: safePageUrlSummary(page) });
 }
 
 async function waitForLoggedInLanding(page, timeoutMs) {
@@ -149,20 +174,20 @@ async function waitForLoggedInLanding(page, timeoutMs) {
       return;
     }
 
-    const challengeVisible = await isAnyVisible(page, MFA_SELECTORS);
-    if (challengeVisible) {
-      throw new Error("Proton requested additional verification; CI needs password-only login for this account");
+    const challenge = await detectChallenge(page);
+    if (challenge) {
+      throw new BootstrapError("INTERACTIVE_CHALLENGE", "login-landing", { challenge });
     }
 
     const errorText = await readFirstVisibleText(page, LOGIN_ERROR_SELECTORS);
     if (errorText) {
-      throw new Error(`Proton login failed: ${errorText}`);
+      throw classifyLoginError(errorText, "login-landing");
     }
 
     await page.waitForTimeout(1000);
   }
 
-  throw new Error(`Timed out waiting for Proton login landing page (last URL: ${page.url() || "unknown"})`);
+  throw new BootstrapError("NETWORK_TIMEOUT", "login-landing", { url: safePageUrlSummary(page) });
 }
 
 async function openCalendarAppIfAvailable(page, timeoutMs) {
@@ -197,9 +222,11 @@ async function exportBundle(context, page, options) {
   const authProbe = await verifyCalendarApiSession(page, uidCandidates);
 
   if (!authProbe) {
-    throw new Error(
-      `Authenticated browser session did not pass Proton Calendar API probe (uidCandidates=${uidCandidates.length}, persistedSessions=${Object.keys(persistedSessions).length}, cookies=${cookies.length})`
-    );
+    throw new BootstrapError("SESSION_INVALID", "auth-probe", {
+      uidCandidateCount: uidCandidates.length,
+      persistedSessionCount: Object.keys(persistedSessions).length,
+      cookieCount: cookies.length,
+    });
   }
 
   return {
@@ -474,7 +501,7 @@ async function waitForFirstVisible(page, selectors, timeoutMs, required = true) 
   }
 
   if (required) {
-    throw new Error(`Unable to find visible Proton login element: ${selectors.join(", ")}`);
+    throw new BootstrapError("UI_DRIFT", "selector", { selectorCount: selectors.length });
   }
   return null;
 }
@@ -500,6 +527,152 @@ async function readFirstVisibleText(page, selectors) {
     }
   }
   return "";
+}
+
+class BootstrapError extends Error {
+  constructor(code, phase, details = {}, cause = null) {
+    super(ERROR_MESSAGES[code] || "Proton CI bootstrap failed.");
+    this.name = "BootstrapError";
+    this.code = code;
+    this.phase = phase;
+    this.details = details;
+    this.exitCode = EXIT_CODES[code] || 1;
+    if (cause) {
+      this.cause = cause;
+    }
+  }
+}
+
+function classifyLoginError(text, phase) {
+  const normalized = String(text || "").toLowerCase();
+  if (/incorrect|invalid|wrong|credential|password|username/.test(normalized)) {
+    return new BootstrapError("BAD_CREDENTIALS", phase);
+  }
+  if (/locked|disabled|suspended/.test(normalized)) {
+    return new BootstrapError("INTERACTIVE_CHALLENGE", phase, { challenge: "account_locked" });
+  }
+  if (/rate|too many|try again later/.test(normalized)) {
+    return new BootstrapError("INTERACTIVE_CHALLENGE", phase, { challenge: "rate_limited" });
+  }
+  return new BootstrapError("UI_DRIFT", phase);
+}
+
+async function detectChallenge(page) {
+  for (const [challenge, selectors] of Object.entries(CHALLENGE_SELECTORS)) {
+    if (await isAnyVisible(page, selectors)) {
+      return challenge;
+    }
+  }
+  return "";
+}
+
+function sanitizeSuccessSummary(payload, options) {
+  const cookieNames = [...new Set((payload.cookies || []).map((cookie) => sanitizeCookieName(cookie.name)).filter(Boolean))].sort();
+  return {
+    outputFile: options.outputFile,
+    source: payload.source,
+    loginUrl: safeUrlSummary(payload.loginUrl),
+    cookieCount: payload.cookies.length,
+    cookieNames,
+    uidCandidateCount: payload.uidCandidates.length,
+    persistedSessionCount: Object.keys(payload.persistedSessions || {}).length,
+    authProbe: payload.authProbe
+      ? {
+          host: safeUrlSummary(payload.authProbe.host),
+          calendarCount: payload.authProbe.calendarCount,
+        }
+      : null,
+  };
+}
+
+function handleFatalError(error, page = null) {
+  const failure = normalizeBootstrapError(error);
+  const details = sanitizeDetails({
+    ...failure.details,
+    phase: failure.phase,
+    url: page ? safePageUrlSummary(page) : failure.details?.url,
+  });
+
+  const payload = {
+    error: {
+      code: failure.code,
+      message: failure.message,
+      details,
+    },
+  };
+
+  try {
+    assertSafeDiagnostics(payload);
+    console.error(JSON.stringify(payload, null, 2));
+    process.exitCode = failure.exitCode;
+  } catch {
+    console.error(JSON.stringify({
+      error: {
+        code: "SANITIZATION_BLOCKED",
+        message: ERROR_MESSAGES.SANITIZATION_BLOCKED,
+        details: { phase: "diagnostics" },
+      },
+    }, null, 2));
+    process.exitCode = EXIT_CODES.SANITIZATION_BLOCKED;
+  }
+}
+
+function normalizeBootstrapError(error) {
+  if (error instanceof BootstrapError) {
+    return error;
+  }
+  const message = String(error?.message || "").toLowerCase();
+  if (/timeout|timed out/.test(message)) {
+    return new BootstrapError("NETWORK_TIMEOUT", "unknown");
+  }
+  if (/browser|chromium|executable/.test(message)) {
+    return new BootstrapError("BROWSER_SETUP", "launch");
+  }
+  return new BootstrapError("UI_DRIFT", "unknown");
+}
+
+function safePageUrlSummary(page) {
+  try {
+    return safeUrlSummary(page?.url());
+  } catch {
+    return null;
+  }
+}
+
+function safeUrlSummary(value) {
+  try {
+    const url = new URL(String(value || ""));
+    const host = url.hostname.toLowerCase();
+    if (!matchesProtonHost(host)) {
+      return { host: "external", path: "/" };
+    }
+    return { host, path: url.pathname || "/" };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeCookieName(name) {
+  return String(name || "")
+    .replace(/^(AUTH|REFRESH)-.+$/i, "$1-<redacted>")
+    .replace(/^(UID)-.+$/i, "$1-<redacted>");
+}
+
+function sanitizeDetails(details) {
+  const safe = {};
+  for (const [key, value] of Object.entries(details || {})) {
+    if (["missing", "challenge", "phase", "url", "uidCandidateCount", "persistedSessionCount", "cookieCount", "selectorCount"].includes(key)) {
+      safe[key] = value;
+    }
+  }
+  return safe;
+}
+
+function assertSafeDiagnostics(value) {
+  const serialized = JSON.stringify(value);
+  if (/AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|UID":|blob":|"cookie"\s*:\s*\{[^}]*"value"/i.test(serialized)) {
+    throw new BootstrapError("SANITIZATION_BLOCKED", "diagnostics");
+  }
 }
 
 const USERNAME_SELECTORS = [
@@ -529,11 +702,26 @@ const COOKIE_BANNER_SELECTORS = [
   'button:has-text("I agree")',
 ];
 
-const MFA_SELECTORS = [
-  'input[name="totp"]',
-  'input[autocomplete="one-time-code"]',
-  'text=/two-factor|2-factor|one-time code|security code/i',
-];
+const CHALLENGE_SELECTORS = {
+  mfa: [
+    'input[name="totp"]',
+    'input[autocomplete="one-time-code"]',
+    'text=/two-factor|2-factor|one-time code|security code/i',
+  ],
+  captcha: [
+    'iframe[src*="captcha"]',
+    'text=/captcha|human verification|verify you are human/i',
+  ],
+  email_code: [
+    'text=/email code|verification code sent|check your email/i',
+  ],
+  account_locked: [
+    'text=/account locked|account disabled|account suspended/i',
+  ],
+  rate_limited: [
+    'text=/rate limit|too many attempts|try again later/i',
+  ],
+};
 
 const LOGIN_ERROR_SELECTORS = [
   '[role="alert"]',
@@ -547,7 +735,16 @@ const CALENDAR_READY_SELECTORS = [
   'button:has-text("Today")',
 ];
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+export {
+  BootstrapError,
+  assertSafeDiagnostics,
+  classifyLoginError,
+  normalizeBootstrapError,
+  parseArgs,
+  safeUrlSummary,
+  sanitizeSuccessSummary,
+};
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  await main();
+}
