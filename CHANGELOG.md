@@ -1,3 +1,10 @@
+## [1.0.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.1...v1.0.2) (2026-05-09)
+
+
+### Bug Fixes
+
+* harden CI Proton login bootstrap ([8408af2](https://github.com/hacker-h/proton-calendar-cli/commit/8408af22b64ce3031ba8d5eaa2134566c2bf0bed))
+
 ## [1.0.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.0...v1.0.1) (2026-05-09)
 
 
