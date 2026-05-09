@@ -1375,6 +1375,7 @@ async function parseMutationArgs(args, options = {}) {
     patch[field] = "";
   }
 
+  validateStringPatchValues(patch, state.clearFields);
   validateTimezonePatch(patch);
 
   return {
@@ -1497,6 +1498,18 @@ function validateTimezonePatch(patch) {
   }
 }
 
+function validateStringPatchValues(patch, clearFields) {
+  const cleared = new Set(clearFields);
+  for (const field of ["title", "description", "location"]) {
+    if (!Object.hasOwn(patch, field) || cleared.has(field)) {
+      continue;
+    }
+    if (typeof patch[field] === "string" && patch[field].trim() === "") {
+      throw new CliError("INVALID_ARGS", `${field} cannot be blank`);
+    }
+  }
+}
+
 function normalizeClearField(raw) {
   const field = normalizeFieldPath(raw);
   if (!CLEARABLE_FIELDS.has(field)) {
@@ -1524,10 +1537,10 @@ function parseAssignmentValue(raw) {
     try {
       return JSON.parse(trimmed);
     } catch {
-      return value;
+      return trimmed;
     }
   }
-  return value;
+  return trimmed;
 }
 
 function setPathValue(target, parts, value) {
@@ -1810,10 +1823,11 @@ function parseJsonObject(raw, errorMessage) {
 
 function requireValue(args, index, option) {
   const value = args[index];
-  if (value === undefined || value === null || String(value).trim() === "") {
+  const trimmed = value === undefined || value === null ? "" : String(value).trim();
+  if (trimmed === "") {
     throw new CliError("INVALID_ARGS", `${option} requires a value`);
   }
-  return value;
+  return trimmed;
 }
 
 function writeOutput(stdout, output, payload) {
