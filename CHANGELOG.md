@@ -1,3 +1,11 @@
+## [1.0.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.3...v1.0.4) (2026-05-09)
+
+
+### Bug Fixes
+
+* exclude exdates from count budget ([bb4a622](https://github.com/hacker-h/proton-calendar-cli/commit/bb4a62207cafe20cb342edc9581a12e1a5e5215e))
+* redact login token from stdout ([104763d](https://github.com/hacker-h/proton-calendar-cli/commit/104763d4e2be2dc9041d47ea9620eedd0783bc69))
+
 ## [1.0.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.2...v1.0.3) (2026-05-09)
 
 
