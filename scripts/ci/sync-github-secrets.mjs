@@ -1,25 +1,49 @@
 #!/usr/bin/env node
 
+import { realpathSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { spawn } from "node:child_process";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 
-const envFile = path.resolve(process.argv[2] || "encrypted/local-live.env");
+const defaultEnvFile = "encrypted/local-live.env";
+const gitCryptMagic = Buffer.from([0x00, 0x47, 0x49, 0x54, 0x43, 0x52, 0x59, 0x50, 0x54, 0x00]);
 const requiredSecrets = ["PROTON_USERNAME", "PROTON_PASSWORD"];
 const optionalSecrets = ["PROTON_TEST_CALENDAR_ID"];
 
-const env = parseEnv(await readFile(envFile, "utf8"));
-const names = [...requiredSecrets, ...optionalSecrets].filter((name) => env[name]);
+export async function runSyncGithubSecrets(options = {}) {
+  const argv = options.argv || process.argv.slice(2);
+  const readFileImpl = options.readFileImpl || readFile;
+  const spawnImpl = options.spawnImpl || spawn;
+  const stdout = options.stdout || process.stdout;
+  const envFile = path.resolve(argv[0] || defaultEnvFile);
+  const raw = await readFileImpl(envFile);
 
-for (const name of requiredSecrets) {
-  if (!env[name]) {
-    throw new Error(`${name} is missing from ${envFile}`);
+  if (isGitCryptLocked(raw)) {
+    throw new Error(`${envFile} is still git-crypt locked. Run git-crypt unlock before syncing GitHub secrets.`);
+  }
+
+  const env = parseEnv(toBuffer(raw).toString("utf8"));
+  const names = [...requiredSecrets, ...optionalSecrets].filter((name) => env[name]);
+
+  for (const name of requiredSecrets) {
+    if (!env[name]) {
+      throw new Error(`${name} is missing from ${envFile}`);
+    }
+  }
+
+  for (const name of names) {
+    await setGitHubSecret(name, env[name], spawnImpl);
+    stdout.write(`Set GitHub secret ${name}\n`);
   }
 }
 
-for (const name of names) {
-  await setGitHubSecret(name, env[name]);
-  console.log(`Set GitHub secret ${name}`);
+export function isGitCryptLocked(raw) {
+  const buffer = toBuffer(raw);
+  if (buffer.length < gitCryptMagic.length) {
+    return false;
+  }
+  return buffer.subarray(0, gitCryptMagic.length).equals(gitCryptMagic);
 }
 
 function parseEnv(raw) {
@@ -45,9 +69,9 @@ function parseEnv(raw) {
   return result;
 }
 
-async function setGitHubSecret(name, value) {
+async function setGitHubSecret(name, value, spawnImpl) {
   await new Promise((resolve, reject) => {
-    const child = spawn("gh", ["secret", "set", name], {
+    const child = spawnImpl("gh", ["secret", "set", name], {
       stdio: ["pipe", "pipe", "pipe"],
     });
 
@@ -66,5 +90,17 @@ async function setGitHubSecret(name, value) {
     });
 
     child.stdin.end(value);
+  });
+}
+
+function toBuffer(raw) {
+  return Buffer.isBuffer(raw) ? raw : Buffer.from(raw);
+}
+
+const isEntrypoint = process.argv[1] && fileURLToPath(import.meta.url) === realpathSync(process.argv[1]);
+if (isEntrypoint) {
+  runSyncGithubSecrets().catch((error) => {
+    console.error(error?.message || error);
+    process.exitCode = 1;
   });
 }
