@@ -60,8 +60,10 @@ test("reports unauthenticated auth status for ApiError AUTH_EXPIRED", async () =
   }
 });
 
-test("rethrows non-ApiError auth status failures unchanged", async () => {
-  const upstreamError = new Error("network unavailable");
+test("rethrows non-ApiError auth-expired-shaped failures unchanged", async () => {
+  const upstreamError = Object.assign(new Error("network unavailable"), {
+    code: "AUTH_EXPIRED",
+  });
   const setup = await createFixture({ authStatusError: upstreamError });
   try {
     await assert.rejects(
