@@ -71,6 +71,7 @@ Logout options:
 Doctor options:
   --cookie-bundle <path>  Cookie bundle path to inspect
   --proton-base-url <url> Proton base URL to probe
+  --fail-on-relogin-required  Exit non-zero when browser login is required
 
 List options:
   --protected         Show only protected events
@@ -329,31 +330,65 @@ async function runDoctorCommand(args, context) {
       : refreshAttempted
         ? "refresh_failed"
         : "refresh_unavailable";
+  const nextStep = readDoctorAuthNextStep({ status, reloginRequired, refreshPossible });
+  const data = {
+    topic: "auth",
+    status,
+    automationReady: !reloginRequired,
+    reloginRequired,
+    refreshPossible,
+    refreshAttempted,
+    refreshSucceeded,
+    nextStep,
+    uid: probeAfter?.uid || null,
+    host: probeAfter?.protonBaseUrl || null,
+    uidCandidates,
+    protonHosts,
+    cookieBundlePath: parsed.cookieBundlePath,
+    authCookies: {
+      before,
+      after,
+    },
+    suggestions: [nextStep.message],
+  };
+
+  if (parsed.failOnReloginRequired && reloginRequired) {
+    throw new CliError("AUTH_RELOGIN_REQUIRED", nextStep.message, data);
+  }
 
   return {
     output: parsed.output,
     payload: {
-      data: {
-        topic: "auth",
-        status,
-        reloginRequired,
-        refreshPossible,
-        refreshAttempted,
-        refreshSucceeded,
-        uid: probeAfter?.uid || null,
-        host: probeAfter?.protonBaseUrl || null,
-        uidCandidates,
-        protonHosts,
-        cookieBundlePath: parsed.cookieBundlePath,
-        authCookies: {
-          before,
-          after,
-        },
-        suggestions: reloginRequired
-          ? ["Run `pc login` and complete browser sign-in."]
-          : ["Auth looks recoverable with current refresh cookies."],
-      },
+      data,
     },
+  };
+}
+
+function readDoctorAuthNextStep({ status, reloginRequired, refreshPossible }) {
+  if (!reloginRequired) {
+    return {
+      code: "proceed",
+      message: "Auth is ready for unattended calendar operations.",
+    };
+  }
+
+  if (status === "refresh_failed") {
+    return {
+      code: "rerun_login_after_failed_refresh",
+      message: "Refresh cookies were present but could not recover the session; run `pc login` interactively.",
+    };
+  }
+
+  if (!refreshPossible) {
+    return {
+      code: "rerun_login_no_refresh_cookie",
+      message: "No usable refresh cookie was found; run `pc login` interactively.",
+    };
+  }
+
+  return {
+    code: "rerun_login",
+    message: "Run `pc login` and complete browser sign-in.",
   };
 }
 
@@ -403,6 +438,7 @@ function parseDoctorArgs(args, env) {
     topic: "auth",
     cookieBundlePath: path.resolve(DEFAULT_COOKIE_BUNDLE_PATH),
     protonBaseUrl: env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
+    failOnReloginRequired: false,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -419,6 +455,10 @@ function parseDoctorArgs(args, env) {
       state.protonBaseUrl = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--fail-on-relogin-required") {
+      state.failOnReloginRequired = true;
+      continue;
+    }
     if (token.startsWith("-")) {
       throw new CliError("INVALID_ARGS", `Unknown doctor option: ${token}`);
     }
@@ -430,6 +470,7 @@ function parseDoctorArgs(args, env) {
     topic: state.topic,
     cookieBundlePath: state.cookieBundlePath,
     protonBaseUrl: state.protonBaseUrl,
+    failOnReloginRequired: state.failOnReloginRequired,
   };
 }
 

@@ -153,7 +153,7 @@ Automation callers should treat `pc` as a JSON command surface with private-API 
 - `error.code` is the stable key for scripts; `error.message` is for humans.
 - Passwords, cookie values, refresh tokens, session blobs, bearer tokens, and raw Proton payloads must not appear in normal output, logs, or CI artifacts.
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
-- Run `pc doctor auth` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
+- Run `pc doctor auth --fail-on-relogin-required` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
 - Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
 - Use `X-Idempotency-Key` for HTTP API mutation retries when available; the CLI does not expose an idempotency flag yet, so retry CLI mutations only after checking whether the event already changed.
 - Back off on auth challenges, rate limits, `Retry-After`, captcha, or human-verification states. Do not loop through repeated browser logins.
@@ -182,10 +182,18 @@ Recommended CI/CD pattern:
 
 ```bash
 set -euo pipefail
-pc doctor auth -o json
+pc doctor auth -o json --fail-on-relogin-required
 pc ls --from 2026-07-01 --to 2026-07-07 -o json
 pc new title="Deploy window" start=2026-07-02T10:00:00Z end=2026-07-02T10:30:00Z timezone=UTC -o json
 ```
+
+For noninteractive jobs, prefer:
+
+```bash
+pc doctor auth -o json --fail-on-relogin-required
+```
+
+`pc doctor auth` emits stable JSON fields for automation: `status`, `automationReady`, `reloginRequired`, `refreshPossible`, `refreshAttempted`, `refreshSucceeded`, and `nextStep.code`. Treat `automationReady: false` or `AUTH_RELOGIN_REQUIRED` as a hard stop before mutations. Current status values are `access_valid`, `refresh_recovered`, `refresh_failed`, and `refresh_unavailable`.
 
 Operational defaults:
 
