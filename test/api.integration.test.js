@@ -696,6 +696,24 @@ test("invalid occurrence event IDs fail before Proton mutation", async () => {
   assert.equal(calls.length, 0);
 });
 
+test("invalid occurrence event IDs return stable API errors on GET and DELETE", async () => {
+  const setup = await createFixture();
+  try {
+    const invalidDateId = encodeURIComponent("evt-series::not-a-date");
+    const badEncodingId = encodeURIComponent("evt-series::%");
+
+    const getResult = await apiRequest(setup, "GET", `/v1/events/${invalidDateId}`);
+    assert.equal(getResult.status, 400);
+    assert.equal(getResult.body.error.code, "INVALID_OCCURRENCE_ID");
+
+    const deleteResult = await apiRequest(setup, "DELETE", `/v1/events/${badEncodingId}`);
+    assert.equal(deleteResult.status, 400);
+    assert.equal(deleteResult.body.error.code, "INVALID_OCCURRENCE_ID");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("scope=following updates this and all future occurrences", async () => {
   const setup = await createFixture();
   try {
