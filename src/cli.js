@@ -233,7 +233,7 @@ async function runLoginCommand(args, context) {
         nextSteps: [
           `source ${parsed.serverEnvPath}`,
           "pnpm start",
-          "pc ls",
+          "open another shell and run: pc ls",
         ],
       },
     },

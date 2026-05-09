@@ -100,7 +100,7 @@ test("login bootstraps cookies and writes local config/env files", async () => {
   assert.deepEqual(payload.data.nextSteps, [
     `source ${serverEnvPath}`,
     "pnpm start",
-    "pc ls",
+    "open another shell and run: pc ls",
   ]);
 });
 
