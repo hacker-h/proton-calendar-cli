@@ -1,3 +1,10 @@
+## [1.0.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.4...v1.0.5) (2026-05-09)
+
+
+### Bug Fixes
+
+* validate CLI timezone inputs ([089ae4f](https://github.com/hacker-h/proton-calendar-cli/commit/089ae4fde3751ef5c0525808f97b411a6b2dccf7))
+
 ## [1.0.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.3...v1.0.4) (2026-05-09)
 
 
