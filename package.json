@@ -7,6 +7,7 @@
     "src/",
     "scripts/bootstrap-proton-cookies.mjs",
     "README.md",
+    "CHANGELOG.md",
     "LICENSE",
     "AGENTS.md"
   ],
@@ -18,6 +19,8 @@
     "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
     "ci:local": "pnpm test:unit && pnpm run smoke:package",
     "pc": "node src/cli.js",
+    "release": "semantic-release",
+    "release:dry-run": "semantic-release --dry-run --debug",
     "smoke:package": "node scripts/ci/package-smoke.mjs",
     "start": "node src/index.js",
     "sync:github-secrets": "node scripts/ci/sync-github-secrets.mjs",
@@ -28,7 +31,13 @@
     "test:live:cli": "node --test \"test/live/cli.live.test.js\""
   },
   "devDependencies": {
-    "playwright": "^1.54.2"
+    "@semantic-release/changelog": "^6.0.3",
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/git": "^10.0.1",
+    "@semantic-release/github": "^12.0.6",
+    "@semantic-release/release-notes-generator": "^14.1.0",
+    "playwright": "^1.54.2",
+    "semantic-release": "^25.0.3"
   },
   "dependencies": {
     "@steipete/sweet-cookie": "^0.1.0",

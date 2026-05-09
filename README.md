@@ -163,6 +163,23 @@ pnpm test:live:cli     # requires live Proton env/session
 
 Pull-request CI runs only the no-quota local gate. Live Proton checks need dedicated credentials and should stay scheduled/manual unless the workflow explicitly opts in.
 
+## Releases
+
+Releases are automated from the GitHub `main` branch with semantic-release.
+Merge Conventional Commit messages such as `feat: ...`, `fix: ...`, or
+`feat!: ...` to `main` to create the next GitHub release and `v<version>` tag.
+
+semantic-release also updates `CHANGELOG.md` and commits that changelog update
+back to `main` with `[skip ci]`. npm publishing is not enabled; add the npm
+plugin and npm credentials separately if package publishing is needed later.
+
+Local release checks:
+
+```bash
+pnpm run ci:local
+pnpm run release:dry-run
+```
+
 ## Current Limitations
 
 - Requires a local API server; normal event commands do not talk directly to Proton.
