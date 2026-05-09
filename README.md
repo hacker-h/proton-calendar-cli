@@ -11,7 +11,8 @@ This is unofficial. Proton does not provide a stable public Calendar API for thi
 ```bash
 pnpm approve-builds
 pnpm install
-pnpm pc -- login
+pnpm add -g .
+pc login
 source secrets/pc-server.env
 pnpm start
 ```
@@ -19,9 +20,9 @@ pnpm start
 In another shell:
 
 ```bash
-pnpm pc -- doctor auth
-pnpm pc -- ls
-pnpm pc -- new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
+pc doctor auth
+pc ls
+pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
 ```
 
 `pc login` opens Chrome for Proton sign-in, exports cookies/session data, generates a local API token, and writes:
@@ -30,32 +31,32 @@ pnpm pc -- new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T1
 - `secrets/pc-cli.json`
 - `secrets/pc-server.env`
 
-If `pc` is not linked globally, use `pnpm pc -- <command>` or `node src/cli.js <command>`.
+`pnpm add -g .` registers this checkout's package bin so `pc` is available on your `PATH`. If `pc` is not found, check `pnpm bin -g` and run `pnpm setup` if pnpm has not configured `PNPM_HOME` yet. Local development fallback: `pnpm pc -- <command>` or `node src/cli.js <command>`.
 
 ## Commands
 
 | Command | Purpose | Example |
 | --- | --- | --- |
-| `pc login` | Browser login, cookie export, CLI/server config generation | `pnpm pc -- login --target-calendar cal_123` |
-| `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pnpm pc -- doctor auth` |
-| `pc ls` | List events; defaults to current ISO week | `pnpm pc -- ls w++ --title review` |
-| `pc new` | Create an event from `field=value` pairs | `pnpm pc -- new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
-| `pc edit` | PATCH-style update; only provided fields are sent | `pnpm pc -- edit evt-1 title="Updated" --clear description` |
-| `pc rm` | Delete an event or recurring scope | `pnpm pc -- rm evt-1 --scope series` |
+| `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --target-calendar cal_123` |
+| `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
+| `pc ls` | List events; defaults to current ISO week | `pc ls w++ --title review` |
+| `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
+| `pc edit` | PATCH-style update; only provided fields are sent | `pc edit evt-1 title="Updated" --clear description` |
+| `pc rm` | Delete an event or recurring scope | `pc rm evt-1 --scope series` |
 
 Useful list examples:
 
 ```bash
-pnpm pc -- ls                              # current week
-pnpm pc -- ls w+                           # current and next week
-pnpm pc -- ls w++                          # current and next two weeks
-pnpm pc -- ls m 7 2026                     # month
-pnpm pc -- ls y 2026                       # year
-pnpm pc -- ls --from 2026-07-01 --to 2026-07-31
-pnpm pc -- ls --protected
-pnpm pc -- ls --unprotected
-pnpm pc -- ls --title review --location "room b"
-pnpm pc -- ls -o table
+pc ls                              # current week
+pc ls w+                           # current and next week
+pc ls w++                          # current and next two weeks
+pc ls m 7 2026                     # month
+pc ls y 2026                       # year
+pc ls --from 2026-07-01 --to 2026-07-31
+pc ls --protected
+pc ls --unprotected
+pc ls --title review --location "room b"
+pc ls -o table
 ```
 
 Supported event fields:
@@ -72,8 +73,8 @@ Supported event fields:
 Recurring event scopes are `series`, `single`, and `following`. `single` and `following` require an occurrence start:
 
 ```bash
-pnpm pc -- edit evt-series --scope single --at 2026-03-12T09:00:00Z title="One-off"
-pnpm pc -- rm evt-series --scope following --at 2026-03-12T09:00:00Z
+pc edit evt-series --scope single --at 2026-03-12T09:00:00Z title="One-off"
+pc rm evt-series --scope following --at 2026-03-12T09:00:00Z
 ```
 
 Notes:

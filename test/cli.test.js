@@ -97,6 +97,11 @@ test("login bootstraps cookies and writes local config/env files", async () => {
   const payload = JSON.parse(stdout.value());
   assert.equal(payload.data.apiToken, "token-123");
   assert.equal(payload.data.targetCalendarId, "cal-1");
+  assert.deepEqual(payload.data.nextSteps, [
+    `source ${serverEnvPath}`,
+    "pnpm start",
+    "open another shell and run: pc ls",
+  ]);
 });
 
 test("authorize alias works for login", async () => {
