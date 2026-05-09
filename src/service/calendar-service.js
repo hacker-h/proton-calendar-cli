@@ -15,6 +15,7 @@ const ALLOWED_FIELDS = new Set([
 const MUTATION_SCOPES = new Set(["single", "following", "series"]);
 const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
 const VALID_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
+const DEFAULT_RECURRENCE_MAX_ITERATIONS = 50000;
 
 export class CalendarService {
   constructor(options) {
@@ -30,6 +31,7 @@ export class CalendarService {
 
     this.protonClient = options.protonClient;
     this.sessionStore = options.sessionStore;
+    this.recurrenceMaxIterations = readPositiveNumber(options.recurrenceMaxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
   }
 
   async authStatus() {
@@ -67,7 +69,9 @@ export class CalendarService {
     const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
     const normalized = rawEvents.map(normalizeEvent);
     const filtered = normalized.filter((event) => event.calendarId === calendarId);
-    const expanded = expandEventsInRange(filtered, range.start, range.end);
+    const expanded = expandEventsInRange(filtered, range.start, range.end, {
+      maxIterations: this.recurrenceMaxIterations,
+    });
 
     expanded.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
     const page = expanded.slice(offset, offset + limit);
@@ -102,7 +106,9 @@ export class CalendarService {
       throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
     }
 
-    const occurrence = materializeOccurrence(event, parsedOccurrence.occurrenceStart);
+    const occurrence = materializeOccurrence(event, parsedOccurrence.occurrenceStart, {
+      maxIterations: this.recurrenceMaxIterations,
+    });
     if (!occurrence) {
       throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
     }
@@ -551,9 +557,9 @@ function buildOccurrenceEventId(eventId, occurrenceStart) {
   return `${eventId}::${encodeURIComponent(occurrenceStart)}`;
 }
 
-function materializeOccurrence(seriesEvent, occurrenceStart) {
+function materializeOccurrence(seriesEvent, occurrenceStart, options = {}) {
   const durationMs = Date.parse(seriesEvent.end) - Date.parse(seriesEvent.start);
-  const matches = generateOccurrences(seriesEvent, occurrenceStart, new Date(Date.parse(occurrenceStart) + 1).toISOString());
+  const matches = generateOccurrences(seriesEvent, occurrenceStart, new Date(Date.parse(occurrenceStart) + 1).toISOString(), options);
   if (matches.length === 0) {
     return null;
   }
@@ -570,7 +576,7 @@ function materializeOccurrence(seriesEvent, occurrenceStart) {
   };
 }
 
-function expandEventsInRange(events, rangeStart, rangeEnd) {
+function expandEventsInRange(events, rangeStart, rangeEnd, options = {}) {
   const expanded = [];
   const detachedKeys = new Set();
 
@@ -595,7 +601,7 @@ function expandEventsInRange(events, rangeStart, rangeEnd) {
     }
 
     const durationMs = Date.parse(event.end) - Date.parse(event.start);
-    const starts = generateOccurrences(event, rangeStart, rangeEnd);
+    const starts = generateOccurrences(event, rangeStart, rangeEnd, options);
     for (const start of starts) {
       const detachedKey = buildDetachedKey(event.id, start);
       if (detachedKeys.has(detachedKey)) {
@@ -617,7 +623,7 @@ function expandEventsInRange(events, rangeStart, rangeEnd) {
   return expanded;
 }
 
-function generateOccurrences(event, rangeStart, rangeEnd) {
+function generateOccurrences(event, rangeStart, rangeEnd, options = {}) {
   if (!event.recurrence) {
     return [];
   }
@@ -633,20 +639,26 @@ function generateOccurrences(event, rangeStart, rangeEnd) {
   const results = [];
   let generatedCount = 0;
   let emitted = 0;
-  const maxGenerated = 5000;
+  const maxIterations = readPositiveNumber(options.maxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
 
   for (const candidate of iterateRecurrenceCandidates(startDate, recurrence)) {
-    if (generatedCount >= maxGenerated || emitted >= countLimit) {
+    if (emitted >= countLimit) {
       break;
+    }
+
+    if (generatedCount >= maxIterations) {
+      throw new ApiError(422, "RECURRENCE_ITERATION_LIMIT", "Recurrence expansion exceeded the candidate iteration limit", {
+        maxIterations,
+      });
     }
 
     const candidateIso = candidate.toISOString();
     const candidateMs = Date.parse(candidateIso);
+    generatedCount += 1;
+
     if (candidateMs > untilMs) {
       break;
     }
-
-    generatedCount += 1;
 
     if (candidateMs >= rangeEndMs) {
       break;
@@ -946,6 +958,14 @@ function readPositiveInt(raw, field, fallback) {
     throw new ApiError(400, "INVALID_RECURRENCE", `${field} must be a positive integer`);
   }
   return num;
+}
+
+function readPositiveNumber(raw, fallback) {
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) {
+    return num;
+  }
+  return fallback;
 }
 
 function normalizeByDay(raw) {
