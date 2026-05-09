@@ -1,3 +1,10 @@
+## [1.0.12](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.11...v1.0.12) (2026-05-09)
+
+
+### Bug Fixes
+
+* propagate idempotency keys to proton sync ([a4b2c51](https://github.com/hacker-h/proton-calendar-cli/commit/a4b2c5127f823d7cfcbda8a0322f98ead263ad38))
+
 ## [1.0.11](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.10...v1.0.11) (2026-05-09)
 
 
