@@ -1,3 +1,10 @@
+# [1.2.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.1.0...v1.2.0) (2026-05-09)
+
+
+### Features
+
+* harden doctor auth automation output ([f6c9b5e](https://github.com/hacker-h/proton-calendar-cli/commit/f6c9b5e7dc2f2fe84a005d6cdbc2022f79f67fa6))
+
 # [1.1.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.12...v1.1.0) (2026-05-09)
 
 
