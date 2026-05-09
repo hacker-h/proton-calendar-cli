@@ -18,7 +18,7 @@
   "scripts": {
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
     "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
-    "check:browser": "pnpm exec playwright install --dry-run chromium",
+    "check:browser": "pnpm exec playwright install --with-deps chromium && node scripts/ci/browser-smoke.mjs",
     "check:toolchain": "node scripts/ci/dependency-health.mjs",
     "ci:local": "pnpm run check:toolchain && pnpm test:unit && pnpm run smoke:package",
     "pc": "node src/cli.js",
