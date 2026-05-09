@@ -5,6 +5,7 @@ import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
+import { fileURLToPath } from "node:url";
 import { getCookies } from "@steipete/sweet-cookie";
 import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
 import {
@@ -237,6 +238,7 @@ function launchChrome(chromePath, profileDir, devtoolsPort, loginUrl, headless =
   }
 
   const child = spawn(chromePath, args, {
+    env: childProcessEnv(),
     stdio: "ignore",
     detached: process.platform !== "win32",
   });
@@ -269,10 +271,6 @@ async function exportCookies(profileDir, devtoolsPort, domains) {
 
 async function exportCookiesWithSweetCookie(profileDir, domains) {
   const chromeProfilePath = await resolveSweetLinkProfilePath(profileDir);
-  const keychainPassword = await readChromeSafeStoragePassword();
-  if (keychainPassword) {
-    process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD = keychainPassword;
-  }
 
   const grouped = {};
   for (const domain of domains) {
@@ -466,46 +464,10 @@ async function resolveSweetLinkProfilePath(profileDir) {
   return profileDir;
 }
 
-function runCommand(command, args, env, options = {}) {
-  return new Promise((resolve, reject) => {
-    const timeoutMs =
-      typeof options.timeoutMs === "number" && Number.isFinite(options.timeoutMs) ? options.timeoutMs : 0;
-    const child = spawn(command, args, {
-      env,
-      stdio: ["ignore", "pipe", "pipe"],
-    });
-
-    let stdout = "";
-    let stderr = "";
-
-    child.stdout.on("data", (chunk) => {
-      stdout += chunk.toString();
-    });
-
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    let timer = null;
-    if (timeoutMs > 0) {
-      timer = setTimeout(() => {
-        child.kill("SIGTERM");
-        reject(new Error(`${command} ${args.join(" ")} timed out after ${timeoutMs}ms`));
-      }, timeoutMs);
-    }
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (timer) {
-        clearTimeout(timer);
-      }
-      if (code === 0) {
-        resolve({ stdout, stderr });
-        return;
-      }
-      reject(new Error(`${command} ${args.join(" ")} failed with code ${code}\n${stderr || stdout}`));
-    });
-  });
+export function childProcessEnv(env = process.env) {
+  const childEnv = { ...env };
+  delete childEnv.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD;
+  return childEnv;
 }
 
 async function openDevToolsTarget(devtoolsPort, urlToOpen) {
@@ -780,33 +742,6 @@ function buildProbeCookieHeader(cookiesByDomain, host, uid) {
   return [...map.entries()].map(([name, value]) => `${name}=${value}`).join("; ");
 }
 
-async function readChromeSafeStoragePassword() {
-  if (process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD) {
-    return process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD;
-  }
-
-  if (process.platform !== "darwin") {
-    return "";
-  }
-
-  try {
-    const result = await runCommand(
-      "security",
-      ["find-generic-password", "-w", "-s", "Chrome Safe Storage"],
-      process.env,
-      { timeoutMs: 2000 }
-    );
-    const password = result.stdout.trim();
-    if (!password) {
-      return "";
-    }
-    process.env.SWEET_COOKIE_CHROME_SAFE_STORAGE_PASSWORD = password;
-    return password;
-  } catch {
-    return "";
-  }
-}
-
 async function shutdownChrome(child) {
   if (!child || typeof child.pid !== "number") {
     return;
@@ -827,7 +762,9 @@ async function shutdownChrome(child) {
   }
 }
 
-main().catch((error) => {
-  console.error(error.message);
-  process.exit(1);
-});
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    console.error(error.message);
+    process.exit(1);
+  });
+}
