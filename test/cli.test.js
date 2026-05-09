@@ -712,6 +712,66 @@ test("edit rejects whitespace-only title before API call", async () => {
   assert.equal(payload.error.message, "title cannot be blank");
 });
 
+test("new rejects reversed time range before API call", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    [
+      "new",
+      "title=Invalid range",
+      "start=2026-07-02T10:30:00Z",
+      "end=2026-07-02T10:00:00Z",
+      "timezone=UTC",
+    ],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout: createWriter(),
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(apiCalled, false);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "end must be after start");
+});
+
+test("edit rejects reversed time range before API call", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    ["edit", "evt-1", "start=2026-07-02T10:30:00Z", "end=2026-07-02T10:00:00Z"],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout: createWriter(),
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(apiCalled, false);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "end must be after start");
+});
+
 test("new trims string assignment values before sending request", async () => {
   const requests = [];
 

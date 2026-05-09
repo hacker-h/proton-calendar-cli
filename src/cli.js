@@ -141,40 +141,59 @@ export async function runPcCli(argv, options = {}) {
       return 0;
     }
 
+    const apiCommand = normalizeApiCommand(command);
+    if (!apiCommand) {
+      throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`);
+    }
+
     const localConfig = await readLocalConfig(env);
     const apiBaseUrl = readBaseUrl(env, localConfig);
     const apiToken = readToken(env, localConfig);
 
-    if (command === "ls" || command === "list") {
+    if (apiCommand === "list") {
       const result = await runListCommand(rest, { apiBaseUrl, apiToken, fetchImpl, now });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "new" || command === "create") {
+    if (apiCommand === "create") {
       const result = await runCreateCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "edit") {
+    if (apiCommand === "edit") {
       const result = await runEditCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "rm" || command === "delete") {
+    if (apiCommand === "delete") {
       const result = await runDeleteCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
-
-    throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`);
   } catch (error) {
     const payload = toCliErrorPayload(error);
     write(stderr, `${JSON.stringify(payload, null, 2)}\n`);
     return 1;
   }
+}
+
+function normalizeApiCommand(command) {
+  if (command === "ls" || command === "list") {
+    return "list";
+  }
+  if (command === "new" || command === "create") {
+    return "create";
+  }
+  if (command === "edit") {
+    return "edit";
+  }
+  if (command === "rm" || command === "delete") {
+    return "delete";
+  }
+  return null;
 }
 
 async function runLoginCommand(args, context) {
@@ -1239,6 +1258,7 @@ async function runCreateCommand(args, context) {
   if (!parsed.patch.end) {
     throw new CliError("INVALID_ARGS", "end is required (end=<ISO>) for pc new");
   }
+  validateStartBeforeEnd(parsed.patch.start, parsed.patch.end);
   if (!parsed.patch.timezone) {
     parsed.patch.timezone = "UTC";
   }
@@ -1265,6 +1285,9 @@ async function runEditCommand(args, context) {
   const parsed = await parseMutationArgs(args, { requireEventId: true });
   if (Object.keys(parsed.patch).length === 0) {
     throw new CliError("EMPTY_PATCH", "No fields to update. Provide field=value, --patch, or --clear.");
+  }
+  if (parsed.patch.start !== undefined && parsed.patch.end !== undefined) {
+    validateStartBeforeEnd(parsed.patch.start, parsed.patch.end);
   }
 
   const path = parsed.calendarId
@@ -1706,20 +1729,20 @@ function resolveRange(state, nowFn) {
     if (!state.start || !state.end) {
       throw new CliError("INVALID_ARGS", "Both --start and --end are required");
     }
-    return {
+    return validateRange({
       start: parseBoundary(state.start, { end: false }),
       end: parseBoundary(state.end, { end: true }),
-    };
+    });
   }
 
   if (state.from || state.to) {
     if (!state.from || !state.to) {
       throw new CliError("INVALID_ARGS", "Both --from and --to are required");
     }
-    return {
+    return validateRange({
       start: parseBoundary(state.from, { end: false }),
       end: parseBoundary(state.to, { end: true }),
-    };
+    });
   }
 
   if (state.all) {
@@ -1730,6 +1753,19 @@ function resolveRange(state, nowFn) {
   }
 
   return resolveShortcutRange(state.positional, nowFn);
+}
+
+function validateRange(range) {
+  validateStartBeforeEnd(range.start, range.end);
+  return range;
+}
+
+function validateStartBeforeEnd(start, end) {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || startMs >= endMs) {
+    throw new CliError("INVALID_ARGS", "end must be after start");
+  }
 }
 
 function resolveShortcutRange(positional, nowFn) {

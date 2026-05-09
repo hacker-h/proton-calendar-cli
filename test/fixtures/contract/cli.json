@@ -388,6 +388,90 @@
       }
     },
     {
+      "name": "unknown command fails before config or API",
+      "argv": ["wat"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "UNKNOWN_COMMAND",
+            "message": "Unknown command: wat"
+          }
+        }
+      }
+    },
+    {
+      "name": "bad output mode fails before API",
+      "argv": ["ls", "-o", "yaml"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "Unsupported output format: yaml"
+          }
+        }
+      }
+    },
+    {
+      "name": "reversed list range fails before API",
+      "argv": ["ls", "--from", "2026-07-31", "--to", "2026-07-01"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "end must be after start"
+          }
+        }
+      }
+    },
+    {
+      "name": "edit missing id fails before API",
+      "argv": ["edit"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "eventId is required"
+          }
+        }
+      }
+    },
+    {
+      "name": "delete missing id fails before API",
+      "argv": ["rm"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "eventId is required"
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid mutation scope fails before API",
+      "argv": ["rm", "evt-1", "--scope", "nope"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "--scope must be single, following, or series"
+          }
+        }
+      }
+    },
+    {
       "name": "expired API auth error passthrough",
       "argv": ["ls", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
       "apiResponse": {
