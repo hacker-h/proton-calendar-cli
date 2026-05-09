@@ -1,3 +1,10 @@
+## [1.0.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.2...v1.0.3) (2026-05-09)
+
+
+### Bug Fixes
+
+* stop leaking Chrome Safe Storage env ([79832ae](https://github.com/hacker-h/proton-calendar-cli/commit/79832aea73d72b7c8ce198cc2d74110e4da77de7))
+
 ## [1.0.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.1...v1.0.2) (2026-05-09)
 
 
