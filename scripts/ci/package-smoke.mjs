@@ -37,6 +37,19 @@ try {
   if (!help.stdout.includes("pc - Proton Calendar CLI")) {
     throw new Error("Packaged pc binary did not print expected help text");
   }
+
+  let lsFailure = null;
+  try {
+    await execFileAsync(binPath, ["ls"], { cwd: installDir });
+  } catch (error) {
+    lsFailure = error;
+  }
+  if (!lsFailure) {
+    throw new Error("Packaged pc ls unexpectedly succeeded without CLI config");
+  }
+  if (lsFailure.code !== 1 || !String(lsFailure.stderr || "").includes('"code": "CONFIG_ERROR"')) {
+    throw new Error(`Packaged pc ls did not emit expected config error: ${lsFailure.stderr || lsFailure.message}`);
+  }
 } finally {
   await rm(tmpDir, { recursive: true, force: true });
 }
