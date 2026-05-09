@@ -1110,10 +1110,39 @@ function buildVcalendarVevent(properties) {
     if (value === undefined || value === null || String(value) === "") {
       continue;
     }
-    lines.push(`${key}:${value}`);
+    lines.push(foldIcsLine(`${key}:${value}`));
   }
   lines.push("END:VEVENT", "END:VCALENDAR", "");
   return lines.join("\r\n");
+}
+
+function foldIcsLine(line) {
+  if (Buffer.byteLength(line, "utf8") <= 75) {
+    return line;
+  }
+
+  const segments = [];
+  let segment = "";
+  let segmentBytes = 0;
+  let limit = 75;
+
+  for (const char of line) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (segment && segmentBytes + charBytes > limit) {
+      segments.push(segment);
+      segment = "";
+      segmentBytes = 0;
+      limit = 74;
+    }
+    segment += char;
+    segmentBytes += charBytes;
+  }
+
+  if (segment) {
+    segments.push(segment);
+  }
+
+  return segments.map((part, index) => (index === 0 ? part : ` ${part}`)).join("\r\n");
 }
 
 function unfoldIcsLines(ics) {
