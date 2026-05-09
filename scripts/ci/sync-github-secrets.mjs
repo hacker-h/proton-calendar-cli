@@ -7,8 +7,16 @@ import path from "node:path";
 const envFile = path.resolve(process.argv[2] || "encrypted/local-live.env");
 const requiredSecrets = ["PROTON_USERNAME", "PROTON_PASSWORD"];
 const optionalSecrets = ["PROTON_TEST_CALENDAR_ID"];
+const gitCryptLockedFileMagic = Buffer.from([0x00, 0x47, 0x49, 0x54, 0x43, 0x52, 0x59, 0x50, 0x54, 0x00]);
 
-const env = parseEnv(await readFile(envFile, "utf8"));
+const envFileBytes = await readFile(envFile);
+if (isGitCryptLockedFile(envFileBytes)) {
+  throw new Error(
+    `Refusing to sync GitHub secrets from ${envFile}: run git-crypt unlock before syncing GitHub secrets.`
+  );
+}
+
+const env = parseEnv(envFileBytes.toString("utf8"));
 const names = [...requiredSecrets, ...optionalSecrets].filter((name) => env[name]);
 
 for (const name of requiredSecrets) {
@@ -43,6 +51,10 @@ function parseEnv(raw) {
     result[key] = value;
   }
   return result;
+}
+
+function isGitCryptLockedFile(bytes) {
+  return bytes.subarray(0, gitCryptLockedFileMagic.length).equals(gitCryptLockedFileMagic);
 }
 
 async function setGitHubSecret(name, value) {
