@@ -631,6 +631,89 @@ test("scope=single updates only one occurrence", async () => {
   }
 });
 
+test("occurrence event IDs preserve base IDs containing separators", async () => {
+  const calls = [];
+  const service = new CalendarService({
+    targetCalendarId: "assistant-calendar",
+    defaultCalendarId: "assistant-calendar",
+    allowedCalendarIds: ["assistant-calendar"],
+    sessionStore: { async getSummary() { return {}; } },
+    protonClient: {
+      async updateEvent(input) {
+        calls.push(input);
+        return {
+          id: input.eventId,
+          calendarId: input.calendarId,
+          title: input.patch.title,
+          description: "",
+          start: input.occurrenceStart || "2026-03-10T09:00:00.000Z",
+          end: "2026-03-10T09:30:00.000Z",
+          timezone: "UTC",
+          location: "",
+          protected: false,
+          recurrence: null,
+        };
+      },
+    },
+  });
+
+  const occurrenceStart = "2026-03-10T09:00:00.000Z";
+
+  await service.updateEvent("evt-plain", { title: "Plain" });
+  await service.updateEvent(`evt-series::${encodeURIComponent(occurrenceStart)}`, { title: "One separator" });
+  await service.updateEvent(`evt::series::${encodeURIComponent(occurrenceStart)}`, { title: "Two separators" });
+
+  assert.deepEqual(calls.map((call) => call.eventId), ["evt-plain", "evt-series", "evt::series"]);
+  assert.deepEqual(calls.map((call) => call.scope), ["series", "single", "single"]);
+  assert.equal(calls[2].occurrenceStart, occurrenceStart);
+});
+
+test("invalid occurrence event IDs fail before Proton mutation", async () => {
+  const calls = [];
+  const service = new CalendarService({
+    targetCalendarId: "assistant-calendar",
+    defaultCalendarId: "assistant-calendar",
+    allowedCalendarIds: ["assistant-calendar"],
+    sessionStore: { async getSummary() { return {}; } },
+    protonClient: {
+      async updateEvent(input) {
+        calls.push(input);
+        return input;
+      },
+    },
+  });
+
+  await assert.rejects(
+    () => service.updateEvent("evt-series::not-a-date", { title: "Bad" }),
+    (error) => error instanceof ApiError && error.code === "INVALID_OCCURRENCE_ID"
+  );
+
+  await assert.rejects(
+    () => service.updateEvent("evt-series::%", { title: "Bad" }),
+    (error) => error instanceof ApiError && error.code === "INVALID_OCCURRENCE_ID"
+  );
+
+  assert.equal(calls.length, 0);
+});
+
+test("invalid occurrence event IDs return stable API errors on GET and DELETE", async () => {
+  const setup = await createFixture();
+  try {
+    const invalidDateId = encodeURIComponent("evt-series::not-a-date");
+    const badEncodingId = encodeURIComponent("evt-series::%");
+
+    const getResult = await apiRequest(setup, "GET", `/v1/events/${invalidDateId}`);
+    assert.equal(getResult.status, 400);
+    assert.equal(getResult.body.error.code, "INVALID_OCCURRENCE_ID");
+
+    const deleteResult = await apiRequest(setup, "DELETE", `/v1/events/${badEncodingId}`);
+    assert.equal(deleteResult.status, 400);
+    assert.equal(deleteResult.body.error.code, "INVALID_OCCURRENCE_ID");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("scope=following updates this and all future occurrences", async () => {
   const setup = await createFixture();
   try {

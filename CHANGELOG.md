@@ -1,3 +1,10 @@
+## [1.0.11](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.10...v1.0.11) (2026-05-09)
+
+
+### Bug Fixes
+
+* parse occurrence ids from final separator ([6c48e6b](https://github.com/hacker-h/proton-calendar-cli/commit/6c48e6b6573b15b56d38e98b43db5b4c8c1cb6ee))
+
 ## [1.0.10](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.9...v1.0.10) (2026-05-09)
 
 
