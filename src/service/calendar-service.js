@@ -393,8 +393,23 @@ function validateRecurrence(raw) {
   const weekStart = raw.weekStart === undefined || raw.weekStart === null ? null : normalizeWeekday(raw.weekStart, "recurrence.weekStart");
   const exDates = normalizeExDates(raw.exDates);
 
-  if (freq !== "WEEKLY" && byDay.length > 0) {
-    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY frequency");
+  if (freq === "WEEKLY" && byDay.some((day) => parseByDayToken(day).ordinal !== null)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must use plain weekdays for WEEKLY frequency");
+  }
+
+  if (freq === "MONTHLY" && byDay.some((day) => {
+    const { ordinal } = parseByDayToken(day);
+    return ordinal !== null && Math.abs(ordinal) > 5;
+  })) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay monthly ordinals must be between 1 and 5");
+  }
+
+  if (freq !== "WEEKLY" && freq !== "MONTHLY" && byDay.length > 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY or MONTHLY frequency");
+  }
+
+  if (freq === "MONTHLY" && byDay.length > 0 && byMonthDay.length > 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay and recurrence.byMonthDay cannot both be set");
   }
 
   if (freq !== "MONTHLY" && byMonthDay.length > 0) {
@@ -688,7 +703,6 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
   }
 
   if (recurrence.freq === "MONTHLY") {
-    const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
     const time = pickUtcTime(startDate);
     let monthOffset = 0;
 
@@ -697,6 +711,21 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
       const year = monthDate.getUTCFullYear();
       const month = monthDate.getUTCMonth();
 
+      if (recurrence.byDay.length > 0) {
+        const candidates = monthlyByDayCandidates(year, month, recurrence.byDay, time);
+
+        for (const candidate of candidates) {
+          if (candidate < startDate) {
+            continue;
+          }
+          yield candidate;
+        }
+
+        monthOffset += 1;
+        continue;
+      }
+
+      const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
       const days = [...byMonthDay].sort((a, b) => a - b);
       for (const dayOfMonth of days) {
         const maxDay = daysInMonthUtc(year, month);
@@ -745,7 +774,8 @@ function parseRRule(rrule) {
   }
 
   const parts = {};
-  for (const pair of rrule.split(";")) {
+  const rule = rrule.trim().replace(/^RRULE:/i, "");
+  for (const pair of rule.split(";")) {
     const [keyRaw, valueRaw] = pair.split("=");
     const key = String(keyRaw || "").trim().toUpperCase();
     const value = String(valueRaw || "").trim();
@@ -926,10 +956,38 @@ function normalizeByDay(raw) {
   const values = Array.isArray(raw) ? raw : String(raw).split(",");
   const unique = new Set();
   for (const value of values) {
-    const normalized = normalizeWeekday(value, "recurrence.byDay");
-    unique.add(normalized);
+    const token = parseByDayToken(value);
+    unique.add(token.normalized);
   }
   return [...unique];
+}
+
+function parseByDayToken(raw) {
+  if (typeof raw !== "string") {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must contain weekday values");
+  }
+
+  const match = raw.trim().toUpperCase().match(/^([+-]?)(\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)$/);
+  if (!match || (match[1] && !match[2])) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must contain weekday values like MO,+1MO,2TU,-1FR");
+  }
+
+  const [, sign, ordinalRaw, weekday] = match;
+  if (!ordinalRaw) {
+    return { ordinal: null, weekday, normalized: weekday };
+  }
+
+  const magnitude = Number(ordinalRaw);
+  if (!Number.isInteger(magnitude) || magnitude < 1 || magnitude > 53) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay ordinals must be between 1 and 53");
+  }
+
+  const ordinal = sign === "-" ? -magnitude : magnitude;
+  return {
+    ordinal,
+    weekday,
+    normalized: `${sign}${magnitude}${weekday}`,
+  };
 }
 
 function normalizeByMonthDay(raw) {
@@ -1002,6 +1060,51 @@ function addMonthsUtc(date, deltaMonths) {
 
 function daysInMonthUtc(year, month) {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function monthlyByDayCandidates(year, month, byDay, time) {
+  const candidates = new Map();
+  const maxDay = daysInMonthUtc(year, month);
+
+  for (const token of byDay) {
+    const { ordinal, weekday } = parseByDayToken(token);
+    if (ordinal !== null) {
+      const date = nthWeekdayOfMonth(year, month, weekday, ordinal);
+      if (date) {
+        const candidate = withUtcTime(date, time);
+        candidates.set(candidate.toISOString(), candidate);
+      }
+      continue;
+    }
+
+    const weekdayIndex = weekdayToIndex(weekday);
+    for (let dayOfMonth = 1; dayOfMonth <= maxDay; dayOfMonth += 1) {
+      const date = new Date(Date.UTC(year, month, dayOfMonth));
+      if (date.getUTCDay() === weekdayIndex) {
+        const candidate = withUtcTime(date, time);
+        candidates.set(candidate.toISOString(), candidate);
+      }
+    }
+  }
+
+  return [...candidates.values()].sort((a, b) => a - b);
+}
+
+function nthWeekdayOfMonth(year, month, weekday, ordinal) {
+  const weekdayIndex = weekdayToIndex(weekday);
+  const maxDay = daysInMonthUtc(year, month);
+
+  if (ordinal > 0) {
+    const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay();
+    const firstMatchingDay = 1 + ((weekdayIndex - firstWeekday + 7) % 7);
+    const dayOfMonth = firstMatchingDay + (ordinal - 1) * 7;
+    return dayOfMonth <= maxDay ? new Date(Date.UTC(year, month, dayOfMonth)) : null;
+  }
+
+  const lastWeekday = new Date(Date.UTC(year, month, maxDay)).getUTCDay();
+  const lastMatchingDay = maxDay - ((lastWeekday - weekdayIndex + 7) % 7);
+  const dayOfMonth = lastMatchingDay + (ordinal + 1) * 7;
+  return dayOfMonth >= 1 ? new Date(Date.UTC(year, month, dayOfMonth)) : null;
 }
 
 function startOfWeek(date, weekStartDayIndex) {
