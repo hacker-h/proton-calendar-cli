@@ -17,7 +17,7 @@ pnpm run check:browser
 pnpm outdated
 ```
 
-When updating Playwright, Chrome/browser automation, `@steipete/sweet-cookie`, or `openpgp`, keep PR CI credential-free and use mocked tests first. Run live Proton canaries only through the scheduled/manual workflow with dedicated credentials, then check the dependency health artifact for outdated packages and browser install drift.
+When updating Playwright, Chrome/browser automation, `@steipete/sweet-cookie`, or `openpgp`, keep PR CI credential-free and use mocked tests first. Run live Proton canaries only through the scheduled/manual workflow with dedicated credentials, then check the dependency health artifact for outdated packages and browser install drift. For native cookie dependency updates, rerun `pnpm approve-builds` and review `pnpm-workspace.yaml` so approved build packages stay intentional.
 
 Pull requests should not require Proton credentials. Use mocked/unit tests for normal changes. Live Proton checks are reserved for scheduled/manual canaries because they spend quota and can fail due to Proton-side auth challenges or backend drift.
 

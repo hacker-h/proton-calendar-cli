@@ -88,7 +88,7 @@ jobs:
       - name: Check toolchain metadata
         run: pnpm run check:toolchain
 
-      - name: Check Playwright browser install plan
+      - name: Install and smoke Playwright browser
         run: pnpm run check:browser
 
       - name: Capture outdated dependency report
