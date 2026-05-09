@@ -6,6 +6,7 @@ import { realpathSync } from "node:fs";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { DEFAULT_PROTON_APP_VERSION } from "./proton/constants.js";
 import { CookieSessionStore } from "./session/cookie-session-store.js";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
@@ -13,7 +14,6 @@ const DEFAULT_LOCAL_CONFIG_PATH = "secrets/pc-cli.json";
 const DEFAULT_SERVER_ENV_PATH = "secrets/pc-server.env";
 const DEFAULT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies.json";
 const DEFAULT_PROTON_BASE_URL = "https://calendar.proton.me";
-const DEFAULT_PROTON_APP_VERSION = "web-calendar@5.0.101.3";
 const DEFAULT_TIMEOUT_MS = 15000;
 const CLEARABLE_FIELDS = new Set(["description", "location"]);
 

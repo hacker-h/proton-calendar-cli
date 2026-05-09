@@ -1,9 +1,9 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as openpgp from "openpgp";
 import { ApiError } from "../errors.js";
+import { DEFAULT_PROTON_APP_VERSION } from "./constants.js";
 import { ProtonAuthManager } from "./proton-auth-manager.js";
 
-const DEFAULT_APP_VERSION = "web-calendar@5.0.101.3";
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
@@ -21,7 +21,7 @@ export class ProtonCalendarClient {
     this.fetchImpl = options.fetchImpl || fetch;
     this.timeoutMs = options.timeoutMs || 10000;
     this.maxRetries = options.maxRetries ?? 2;
-    this.appVersion = options.appVersion || DEFAULT_APP_VERSION;
+    this.appVersion = options.appVersion || DEFAULT_PROTON_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
     this.authManager =
