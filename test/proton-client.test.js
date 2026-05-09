@@ -406,6 +406,78 @@ test("buildSharedParts emits VALUE=DATE for all-day events", () => {
   assert.doesNotMatch(parts.encryptedPart, /ORGANIZER/);
 });
 
+test("buildSharedParts folds long ASCII VEVENT lines", () => {
+  const title = "A".repeat(100);
+  const description = "B".repeat(100);
+  const location = "C".repeat(100);
+  const parts = buildSharedParts({
+    uid: "event-4",
+    sequence: 0,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-03-21T10:00:00.000Z"),
+    endDate: new Date("2026-03-21T10:30:00.000Z"),
+    title,
+    description,
+    location,
+    recurrence: null,
+    createdDate: new Date("2026-03-20T09:00:00.000Z"),
+    timezone: "UTC",
+  });
+
+  assertPhysicalLinesAtMost75Octets(parts.encryptedPart);
+  assert.match(parts.encryptedPart, /SUMMARY:[^\r]+\r\n /);
+  const properties = readUnfoldedProperties(parts.encryptedPart);
+  assert.equal(properties.SUMMARY, title);
+  assert.equal(properties.DESCRIPTION, description);
+  assert.equal(properties.LOCATION, location);
+});
+
+test("buildSharedParts folds multibyte VEVENT lines without splitting characters", () => {
+  const title = "Résumé ".repeat(14);
+  const description = "説明".repeat(30);
+  const parts = buildSharedParts({
+    uid: "event-5",
+    sequence: 0,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-03-21T10:00:00.000Z"),
+    endDate: new Date("2026-03-21T10:30:00.000Z"),
+    title,
+    description,
+    location: "会議室".repeat(12),
+    recurrence: null,
+    createdDate: new Date("2026-03-20T09:00:00.000Z"),
+    timezone: "UTC",
+  });
+
+  assertPhysicalLinesAtMost75Octets(parts.encryptedPart);
+  const properties = readUnfoldedProperties(parts.encryptedPart);
+  assert.equal(properties.SUMMARY, title);
+  assert.equal(properties.DESCRIPTION, description);
+  assert.doesNotMatch(parts.encryptedPart, /�/);
+});
+
+test("buildSharedParts leaves exact-boundary VEVENT lines unfolded", () => {
+  const title = "A".repeat(67);
+  const parts = buildSharedParts({
+    uid: "event-6",
+    sequence: 0,
+    organizerEmail: "bot@example.com",
+    startDate: new Date("2026-03-21T10:00:00.000Z"),
+    endDate: new Date("2026-03-21T10:30:00.000Z"),
+    title,
+    description: "",
+    location: "",
+    recurrence: null,
+    createdDate: new Date("2026-03-20T09:00:00.000Z"),
+    timezone: "UTC",
+  });
+
+  assertPhysicalLinesAtMost75Octets(parts.encryptedPart);
+  const summaryLine = parts.encryptedPart.split("\r\n").find((line) => line.startsWith("SUMMARY:"));
+  assert.equal(Buffer.byteLength(summaryLine, "utf8"), 75);
+  assert.equal(parts.encryptedPart.includes(`${summaryLine}\r\n `), false);
+});
+
 test("buildCreateSyncRequestBody defaults to organizer permissions", () => {
   const body = buildCreateSyncRequestBody({
     memberId: "member-1",
@@ -525,4 +597,43 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+function assertPhysicalLinesAtMost75Octets(ics) {
+  for (const line of ics.split("\r\n")) {
+    if (!line) {
+      continue;
+    }
+    assert.equal(Buffer.byteLength(line, "utf8") <= 75, true, `${line} exceeds 75 octets`);
+  }
+}
+
+function readUnfoldedProperties(ics) {
+  const properties = {};
+  let current = "";
+  for (const line of ics.split("\r\n")) {
+    if (!line) {
+      continue;
+    }
+    if (line.startsWith(" ")) {
+      current += line.slice(1);
+      continue;
+    }
+    if (current) {
+      addProperty(properties, current);
+    }
+    current = line;
+  }
+  if (current) {
+    addProperty(properties, current);
+  }
+  return properties;
+}
+
+function addProperty(properties, line) {
+  const separator = line.indexOf(":");
+  if (separator <= 0) {
+    return;
+  }
+  properties[line.slice(0, separator)] = line.slice(separator + 1);
 }
