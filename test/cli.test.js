@@ -95,7 +95,8 @@ test("login bootstraps cookies and writes local config/env files", async () => {
   assert.equal(envFile.includes("# export PROTON_RELOGIN_MODE=\"headless\""), true);
 
   const payload = JSON.parse(stdout.value());
-  assert.equal(payload.data.apiToken, "token-123");
+  assert.equal(Object.hasOwn(payload.data, "apiToken"), false);
+  assert.equal(stdout.value().includes("token-123"), false);
   assert.equal(payload.data.targetCalendarId, "cal-1");
   assert.deepEqual(payload.data.nextSteps, [
     `source ${serverEnvPath}`,

@@ -226,7 +226,6 @@ async function runLoginCommand(args, context) {
         login: "ok",
         uid,
         targetCalendarId,
-        apiToken,
         cookieBundlePath: parsed.cookieBundlePath,
         pcConfigPath: parsed.pcConfigPath,
         serverEnvPath: parsed.serverEnvPath,
