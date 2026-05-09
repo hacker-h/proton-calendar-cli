@@ -15,6 +15,7 @@ import {
   flattenCookies,
   looksAuthenticated,
 } from "../src/proton-cookie-bootstrap.js";
+import { DEFAULT_PROTON_APP_VERSION } from "../src/proton/constants.js";
 
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_POLL_SECONDS = 3;
@@ -709,7 +710,7 @@ async function verifyCalendarApiSession(cookiesByDomain, uidCandidates) {
           headers: {
             Accept: "application/vnd.protonmail.v1+json",
             Cookie: cookieHeader,
-            "x-pm-appversion": "web-calendar@5.0.101.3",
+            "x-pm-appversion": DEFAULT_PROTON_APP_VERSION,
             "x-pm-locale": "en-US",
             "x-pm-uid": uid,
           },
