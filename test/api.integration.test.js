@@ -210,6 +210,70 @@ test("rejects calendars outside allowlist", async () => {
   }
 });
 
+test("mutation routes preserve idempotency keys and omit missing keys", async () => {
+  const mutationCalls = [];
+  const setup = await createFixture({ mutationCalls });
+  try {
+    const created = await apiRequest(
+      setup,
+      "POST",
+      "/v1/events",
+      {
+        title: "Idempotent create",
+        start: "2026-03-10T10:00:00.000Z",
+        end: "2026-03-10T10:30:00.000Z",
+        timezone: "UTC",
+      },
+      { idempotencyKey: "retry-create" }
+    );
+    assert.equal(created.status, 201);
+
+    const patched = await apiRequest(
+      setup,
+      "PATCH",
+      `/v1/events/${encodeURIComponent(created.body.data.id)}`,
+      { title: "Idempotent patch" },
+      { idempotencyKey: "retry-patch" }
+    );
+    assert.equal(patched.status, 200);
+
+    const deleted = await apiRequest(
+      setup,
+      "DELETE",
+      `/v1/events/${encodeURIComponent(created.body.data.id)}`,
+      undefined,
+      { idempotencyKey: "retry-delete" }
+    );
+    assert.equal(deleted.status, 200);
+
+    const createdWithoutKey = await apiRequest(
+      setup,
+      "POST",
+      "/v1/events",
+      {
+        title: "No idempotency key",
+        start: "2026-03-10T11:00:00.000Z",
+        end: "2026-03-10T11:30:00.000Z",
+        timezone: "UTC",
+      },
+      { idempotencyKey: null }
+    );
+    assert.equal(createdWithoutKey.status, 201);
+
+    assert.deepEqual(
+      mutationCalls.map((call) => [call.operation, call.idempotencyKey]),
+      [
+        ["create", "retry-create"],
+        ["update", "retry-patch"],
+        ["delete", "retry-delete"],
+        ["create", undefined],
+      ]
+    );
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports recurrence and expands instances in list responses", async () => {
   const setup = await createFixture();
   try {
@@ -1132,6 +1196,7 @@ async function createFixture(options = {}) {
     baseUrl: protonBaseUrl,
     calendarIds,
     authStatusError: options.authStatusError,
+    mutationCalls: options.mutationCalls,
   });
 
   const initialSessionCookie = options.initialSessionCookie || proton.validSessionCookie;
@@ -1167,14 +1232,21 @@ async function createFixture(options = {}) {
   };
 }
 
-async function apiRequest(setup, method, route, body) {
+async function apiRequest(setup, method, route, body, options = {}) {
+  const headers = {
+    Authorization: "Bearer test-token",
+    "Content-Type": "application/json",
+  };
+  const idempotencyKey = Object.hasOwn(options, "idempotencyKey")
+    ? options.idempotencyKey
+    : "test-idempotency-key";
+  if (idempotencyKey) {
+    headers["X-Idempotency-Key"] = idempotencyKey;
+  }
+
   const response = await fetch(`${setup.api.baseUrl}${route}`, {
     method,
-    headers: {
-      Authorization: "Bearer test-token",
-      "Content-Type": "application/json",
-      "X-Idempotency-Key": "test-idempotency-key",
-    },
+    headers,
     body: body ? JSON.stringify(body) : undefined,
   });
 
@@ -1243,6 +1315,17 @@ function createMockProtonClient(options) {
     return store;
   }
 
+  function recordMutation(operation, input) {
+    if (!options.mutationCalls) {
+      return;
+    }
+    options.mutationCalls.push({
+      operation,
+      calendarId: input.calendarId,
+      idempotencyKey: input.idempotencyKey,
+    });
+  }
+
   const client = {
     async authStatus() {
       if (options.authStatusError) {
@@ -1278,7 +1361,9 @@ function createMockProtonClient(options) {
       };
     },
 
-    async createEvent({ calendarId, event }) {
+    async createEvent(input) {
+      const { calendarId, event } = input;
+      recordMutation("create", input);
       await assertAuthorized();
       const store = readCalendarStore(calendarId);
       const now = new Date().toISOString();
@@ -1307,7 +1392,9 @@ function createMockProtonClient(options) {
       return { ...record, recurrence: cloneRecurrence(record.recurrence) };
     },
 
-    async updateEvent({ calendarId, eventId, patch, scope, occurrenceStart }) {
+    async updateEvent(input) {
+      const { calendarId, eventId, patch, scope, occurrenceStart } = input;
+      recordMutation("update", input);
       await assertAuthorized();
       const store = readCalendarStore(calendarId);
       const existing = store.get(eventId);
@@ -1405,7 +1492,9 @@ function createMockProtonClient(options) {
       throw new ApiError(400, "INVALID_SCOPE", "Unsupported scope");
     },
 
-    async deleteEvent({ calendarId, eventId, scope, occurrenceStart }) {
+    async deleteEvent(input) {
+      const { calendarId, eventId, scope, occurrenceStart } = input;
+      recordMutation("delete", input);
       await assertAuthorized();
       const store = readCalendarStore(calendarId);
       const existing = store.get(eventId);
