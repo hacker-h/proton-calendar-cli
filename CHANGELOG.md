@@ -1,3 +1,10 @@
+## [1.0.9](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.8...v1.0.9) (2026-05-09)
+
+
+### Bug Fixes
+
+* fold long vevent lines ([fe0d92c](https://github.com/hacker-h/proton-calendar-cli/commit/fe0d92c2ace3b9dfd036a78cdc7c284ff45b42d9))
+
 ## [1.0.8](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.7...v1.0.8) (2026-05-09)
 
 
