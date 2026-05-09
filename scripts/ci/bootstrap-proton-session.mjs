@@ -389,7 +389,7 @@ async function verifyCalendarApiSession(page, uidCandidates) {
 
   for (const uid of candidates) {
     try {
-      const payload = await page.evaluate(async (candidateUid, appVersion) => {
+      const payload = await page.evaluate(async ({ candidateUid, appVersion }) => {
         const response = await fetch("/api/calendar/v1", {
           method: "GET",
           headers: {
@@ -413,7 +413,7 @@ async function verifyCalendarApiSession(page, uidCandidates) {
           status: response.status,
           body,
         };
-      }, uid, DEFAULT_PROTON_APP_VERSION);
+      }, { candidateUid: uid, appVersion: DEFAULT_PROTON_APP_VERSION });
 
       const calendars = Array.isArray(payload?.body?.Calendars) ? payload.body.Calendars : [];
       if (payload?.ok && [1000, 1001].includes(payload?.body?.Code) && calendars.length > 0) {
