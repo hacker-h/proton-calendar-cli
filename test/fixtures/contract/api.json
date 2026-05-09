@@ -1,0 +1,291 @@
+{
+  "health": {
+    "request": {
+      "method": "GET",
+      "route": "/v1/health",
+      "auth": false
+    },
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "status": "ok",
+          "requestId": "<request-id>"
+        }
+      }
+    }
+  },
+  "authStatus": {
+    "request": {
+      "method": "GET",
+      "route": "/v1/auth/status"
+    },
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "authenticated": true,
+          "targetCalendarId": "assistant-calendar",
+          "defaultCalendarId": "assistant-calendar",
+          "allowedCalendarIds": ["assistant-calendar"],
+          "session": {
+            "cookieCount": 2,
+            "domains": ["calendar.proton.me"],
+            "source": "contract-fixture"
+          },
+          "upstream": {
+            "ok": true,
+            "account": "assistant"
+          }
+        }
+      }
+    }
+  },
+  "crud": [
+    {
+      "name": "create event",
+      "request": {
+        "method": "POST",
+        "route": "/v1/events",
+        "body": {
+          "title": "Design review",
+          "start": "2026-03-10T10:00:00.000Z",
+          "end": "2026-03-10T10:30:00.000Z",
+          "timezone": "UTC",
+          "protected": false
+        }
+      },
+      "expected": {
+        "status": 201,
+        "body": {
+          "data": {
+            "id": "evt-1",
+            "calendarId": "assistant-calendar",
+            "title": "Design review",
+            "start": "2026-03-10T10:00:00.000Z",
+            "end": "2026-03-10T10:30:00.000Z",
+            "timezone": "UTC",
+            "protected": false
+          }
+        }
+      }
+    },
+    {
+      "name": "list events",
+      "request": {
+        "method": "GET",
+        "route": "/v1/events?start=2026-03-10T00:00:00.000Z&end=2026-03-11T00:00:00.000Z"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-1",
+                "calendarId": "assistant-calendar",
+                "title": "Design review",
+                "start": "2026-03-10T10:00:00.000Z",
+                "end": "2026-03-10T10:30:00.000Z",
+                "timezone": "UTC",
+                "protected": false
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      }
+    },
+    {
+      "name": "edit event",
+      "request": {
+        "method": "PATCH",
+        "route": "/v1/events/evt-1?scope=series",
+        "body": {
+          "title": "Updated review"
+        }
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "evt-1",
+            "calendarId": "assistant-calendar",
+            "title": "Updated review",
+            "start": "2026-03-10T10:00:00.000Z",
+            "end": "2026-03-10T10:30:00.000Z",
+            "timezone": "UTC",
+            "protected": false
+          }
+        }
+      }
+    },
+    {
+      "name": "delete event",
+      "request": {
+        "method": "DELETE",
+        "route": "/v1/events/evt-1?scope=series"
+      },
+      "expected": {
+        "status": 200,
+        "body": {
+          "data": {
+            "deleted": true,
+            "eventId": "evt-1",
+            "scope": "series",
+            "occurrenceStart": null
+          }
+        }
+      }
+    }
+  ],
+  "recurrence": {
+    "name": "list recurring event",
+    "request": {
+      "method": "GET",
+      "route": "/v1/events?start=2026-04-06T00:00:00.000Z&end=2026-04-13T00:00:00.000Z"
+    },
+    "expected": {
+      "status": 200,
+      "body": {
+        "data": {
+          "events": [
+            {
+              "id": "evt-recurring::2026-04-07T15%3A00%3A00.000Z",
+              "calendarId": "assistant-calendar",
+              "seriesId": "evt-recurring",
+              "title": "Weekly sync",
+              "start": "2026-04-07T15:00:00.000Z",
+              "end": "2026-04-07T15:30:00.000Z",
+              "timezone": "UTC",
+              "protected": false,
+              "isRecurring": true,
+              "recurrence": {
+                "freq": "WEEKLY",
+                "interval": 1,
+                "count": 4,
+                "until": null,
+                "byDay": ["TU"],
+                "byMonthDay": [],
+                "weekStart": null,
+                "exDates": []
+              }
+            }
+          ],
+          "nextCursor": null
+        }
+      }
+    }
+  },
+  "errors": [
+    {
+      "name": "missing bearer token",
+      "request": {
+        "method": "GET",
+        "route": "/v1/events?start=2026-03-10T00:00:00.000Z&end=2026-03-11T00:00:00.000Z",
+        "auth": false
+      },
+      "expected": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "UNAUTHORIZED",
+            "message": "Missing bearer token"
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid JSON body",
+      "request": {
+        "method": "POST",
+        "route": "/v1/events",
+        "rawBody": "{not-json"
+      },
+      "expected": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "INVALID_JSON",
+            "message": "Request body must be valid JSON"
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid payload envelope",
+      "request": {
+        "method": "POST",
+        "route": "/v1/events",
+        "body": {
+          "start": "2026-03-10T10:00:00.000Z",
+          "end": "2026-03-10T10:30:00.000Z",
+          "timezone": "UTC"
+        }
+      },
+      "expected": {
+        "status": 400,
+        "body": {
+          "error": {
+            "code": "INVALID_PAYLOAD",
+            "message": "title must be a string"
+          }
+        }
+      }
+    },
+    {
+      "name": "expired auth envelope",
+      "request": {
+        "method": "GET",
+        "route": "/v1/auth/status"
+      },
+      "expected": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "AUTH_EXPIRED",
+            "message": "Proton session is expired or unauthorized",
+            "details": {
+              "reloginRequired": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "upstream failure envelope",
+      "request": {
+        "method": "GET",
+        "route": "/v1/events?start=2026-05-01T00:00:00.000Z&end=2026-05-02T00:00:00.000Z"
+      },
+      "expected": {
+        "status": 502,
+        "body": {
+          "error": {
+            "code": "UPSTREAM_UNREACHABLE",
+            "message": "Unable to reach Proton backend",
+            "details": {
+              "cause": "network"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "not found envelope",
+      "request": {
+        "method": "GET",
+        "route": "/v1/nope"
+      },
+      "expected": {
+        "status": 404,
+        "body": {
+          "error": {
+            "code": "NOT_FOUND",
+            "message": "Route not found"
+          }
+        }
+      }
+    }
+  ]
+}
