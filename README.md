@@ -182,7 +182,7 @@ Recommended CI/CD pattern:
 
 ```bash
 set -euo pipefail
-pc doctor auth -o json
+pc doctor auth -o json --fail-on-relogin-required
 pc ls --from 2026-07-01 --to 2026-07-07 -o json
 pc new title="Deploy window" start=2026-07-02T10:00:00Z end=2026-07-02T10:30:00Z timezone=UTC -o json
 ```

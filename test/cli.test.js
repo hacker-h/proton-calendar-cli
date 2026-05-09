@@ -182,6 +182,7 @@ test("doctor auth reports access valid when calendar probe succeeds", async () =
   );
   await chmod(cookieBundlePath, 0o600);
 
+  const stdout = createWriter();
   const exitCode = await runPcCli(["doctor", "auth", "--cookie-bundle", cookieBundlePath], {
     env: {},
     fetchImpl: async (url) => {
@@ -194,11 +195,16 @@ test("doctor auth reports access valid when calendar probe succeeds", async () =
       }
       return jsonResponse(404, { Code: 404, Error: "not found" });
     },
-    stdout: createWriter(),
+    stdout,
     stderr: createWriter(),
   });
 
   assert.equal(exitCode, 0);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.status, "access_valid");
+  assert.equal(payload.data.automationReady, true);
+  assert.equal(payload.data.reloginRequired, false);
+  assert.equal(payload.data.nextStep.code, "proceed");
 });
 
 test("doctor auth detects refresh recovery path", async () => {
@@ -412,6 +418,59 @@ test("doctor auth can fail CI when browser relogin is required", async () => {
   assert.equal(payload.error.details.status, "refresh_unavailable");
   assert.equal(payload.error.details.automationReady, false);
   assert.equal(payload.error.details.nextStep.code, "rerun_login_no_refresh_cookie");
+});
+
+test("doctor auth can fail CI after refresh recovery fails", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-doctor-ci-refresh-failed-"));
+  const cookieBundlePath = path.join(tmpDir, "cookies.json");
+  await writeFile(
+    cookieBundlePath,
+    `${JSON.stringify(
+      {
+        cookies: [
+          {
+            name: "AUTH-uid-1",
+            value: "stale",
+            domain: "calendar.proton.me",
+            path: "/api/",
+            secure: true,
+          },
+          {
+            name: "REFRESH-uid-1",
+            value: "%7B%22ResponseType%22%3A%22token%22%2C%22GrantType%22%3A%22refresh_token%22%2C%22RefreshToken%22%3A%22r1%22%2C%22UID%22%3A%22uid-1%22%7D",
+            domain: "calendar.proton.me",
+            path: "/api/auth/refresh",
+            secure: true,
+          },
+        ],
+        uidCandidates: ["uid-1"],
+      },
+      null,
+      2
+    )}\n`
+  );
+  await chmod(cookieBundlePath, 0o600);
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli([
+    "doctor",
+    "auth",
+    "--cookie-bundle",
+    cookieBundlePath,
+    "--fail-on-relogin-required",
+  ], {
+    env: {},
+    fetchImpl: async () => jsonResponse(401, { Code: 2001, Error: "Unauthorized" }),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "AUTH_RELOGIN_REQUIRED");
+  assert.equal(payload.error.details.status, "refresh_failed");
+  assert.equal(payload.error.details.automationReady, false);
+  assert.equal(payload.error.details.nextStep.code, "rerun_login_after_failed_refresh");
 });
 
 test("ls defaults to current week and emits json", async () => {
