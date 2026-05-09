@@ -414,12 +414,12 @@ function validateRecurrence(raw) {
     throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY or MONTHLY frequency");
   }
 
-  if (freq === "MONTHLY" && byDay.length > 0 && byMonthDay.length > 0) {
-    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay and recurrence.byMonthDay cannot both be set");
-  }
-
   if (freq !== "MONTHLY" && byMonthDay.length > 0) {
     throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byMonthDay is only supported for MONTHLY frequency");
+  }
+
+  if (freq === "MONTHLY" && byDay.length > 0 && byMonthDay.length > 0 && !monthlyByDayCanMatchMonthDay(byDay, byMonthDay)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay and recurrence.byMonthDay cannot produce any monthly dates");
   }
 
   return {
@@ -724,7 +724,7 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
       const month = monthDate.getUTCMonth();
 
       if (recurrence.byDay.length > 0) {
-        const candidates = monthlyByDayCandidates(year, month, recurrence.byDay, time);
+        const candidates = monthlyByDayCandidates(year, month, recurrence.byDay, recurrence.byMonthDay, time);
 
         for (const candidate of candidates) {
           if (candidate < startDate) {
@@ -1010,6 +1010,27 @@ function parseByDayToken(raw) {
   };
 }
 
+function monthlyByDayCanMatchMonthDay(byDay, byMonthDay) {
+  return byDay.some((token) => {
+    const { ordinal } = parseByDayToken(token);
+    if (ordinal === null) {
+      return true;
+    }
+    return byMonthDay.some((dayOfMonth) => ordinalCanMatchMonthDay(ordinal, dayOfMonth));
+  });
+}
+
+function ordinalCanMatchMonthDay(ordinal, dayOfMonth) {
+  if (ordinal > 0) {
+    return dayOfMonth >= 1 + (ordinal - 1) * 7 && dayOfMonth <= ordinal * 7;
+  }
+
+  const magnitude = Math.abs(ordinal);
+  const minDay = Math.max(1, 28 - (magnitude * 7 - 1));
+  const maxDay = 31 - (magnitude - 1) * 7;
+  return dayOfMonth >= minDay && dayOfMonth <= maxDay;
+}
+
 function normalizeByMonthDay(raw) {
   if (raw === undefined || raw === null || raw === "") {
     return [];
@@ -1082,15 +1103,16 @@ function daysInMonthUtc(year, month) {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
-function monthlyByDayCandidates(year, month, byDay, time) {
+function monthlyByDayCandidates(year, month, byDay, byMonthDay, time) {
   const candidates = new Map();
   const maxDay = daysInMonthUtc(year, month);
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(byMonthDay) : null;
 
   for (const token of byDay) {
     const { ordinal, weekday } = parseByDayToken(token);
     if (ordinal !== null) {
       const date = nthWeekdayOfMonth(year, month, weekday, ordinal);
-      if (date) {
+      if (date && (!allowedMonthDays || allowedMonthDays.has(date.getUTCDate()))) {
         const candidate = withUtcTime(date, time);
         candidates.set(candidate.toISOString(), candidate);
       }
@@ -1099,6 +1121,9 @@ function monthlyByDayCandidates(year, month, byDay, time) {
 
     const weekdayIndex = weekdayToIndex(weekday);
     for (let dayOfMonth = 1; dayOfMonth <= maxDay; dayOfMonth += 1) {
+      if (allowedMonthDays && !allowedMonthDays.has(dayOfMonth)) {
+        continue;
+      }
       const date = new Date(Date.UTC(year, month, dayOfMonth));
       if (date.getUTCDay() === weekdayIndex) {
         const candidate = withUtcTime(date, time);

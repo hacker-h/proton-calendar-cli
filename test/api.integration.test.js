@@ -292,6 +292,18 @@ test("supports monthly ordinal BYDAY recurrence expansion", async () => {
           "2026-08-31T09:00:00.000Z",
         ],
       },
+      {
+        title: "Friday the 13th",
+        recurrence: { freq: "MONTHLY", count: 2, byDay: ["FR"], byMonthDay: [13] },
+        expectedByDay: ["FR"],
+        expectedStarts: ["2026-02-13T09:00:00.000Z", "2026-03-13T09:00:00.000Z"],
+      },
+      {
+        title: "First Monday on first day",
+        recurrence: { freq: "MONTHLY", count: 1, byDay: ["+1MO"], byMonthDay: [1] },
+        expectedByDay: ["+1MO"],
+        expectedStarts: ["2026-06-01T09:00:00.000Z"],
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -352,6 +364,15 @@ test("expands monthly BYDAY from RRULE strings", async () => {
               timezone: "UTC",
               rrule: "RRULE:FREQ=MONTHLY;COUNT=4;BYDAY=MO",
             },
+            {
+              id: "evt-rrule-friday-13th",
+              calendarId: "assistant-calendar",
+              title: "RRULE Friday the 13th",
+              start: "2026-01-01T11:00:00.000Z",
+              end: "2026-01-01T11:30:00.000Z",
+              timezone: "UTC",
+              rrule: "RRULE:FREQ=MONTHLY;COUNT=2;BYDAY=FR;BYMONTHDAY=13",
+            },
           ],
           nextCursor: null,
         };
@@ -372,6 +393,10 @@ test("expands monthly BYDAY from RRULE strings", async () => {
   assert.deepEqual(
     listed.events.filter((event) => event.title === "RRULE Mondays").map((event) => event.occurrenceStart),
     ["2026-01-05T10:00:00.000Z", "2026-01-12T10:00:00.000Z", "2026-01-19T10:00:00.000Z", "2026-01-26T10:00:00.000Z"]
+  );
+  assert.deepEqual(
+    listed.events.filter((event) => event.title === "RRULE Friday the 13th").map((event) => event.occurrenceStart),
+    ["2026-02-13T11:00:00.000Z", "2026-03-13T11:00:00.000Z"]
   );
 });
 
@@ -758,15 +783,15 @@ test("validates recurrence constraints and scope requirements", async () => {
     assert.equal(weeklyOrdinalByDay.status, 400);
     assert.equal(weeklyOrdinalByDay.body.error.code, "INVALID_RECURRENCE");
 
-    const monthlyMixedByDay = await apiRequest(setup, "POST", "/v1/events", {
-      title: "Bad monthly byDay",
+    const monthlyOrdinalOutOfRange = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad monthly ordinal byDay",
       start: "2026-03-10T10:00:00.000Z",
       end: "2026-03-10T10:30:00.000Z",
       timezone: "UTC",
-      recurrence: { freq: "MONTHLY", byDay: ["+1MO"], byMonthDay: [1] },
+      recurrence: { freq: "MONTHLY", byDay: ["+6MO"] },
     });
-    assert.equal(monthlyMixedByDay.status, 400);
-    assert.equal(monthlyMixedByDay.body.error.code, "INVALID_RECURRENCE");
+    assert.equal(monthlyOrdinalOutOfRange.status, 400);
+    assert.equal(monthlyOrdinalOutOfRange.body.error.code, "INVALID_RECURRENCE");
 
     const created = await apiRequest(setup, "POST", "/v1/events", {
       title: "Good recurrence",
@@ -794,6 +819,15 @@ test("validates recurrence constraints and scope requirements", async () => {
     assert.equal(invalidRange.status, 400);
     assert.equal(invalidRange.body.error.code, "INVALID_TIME_RANGE");
 
+    const impossibleMonthlyByDay = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Impossible monthly BYDAY",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "MONTHLY", count: 1, byDay: ["+1MO"], byMonthDay: [31] },
+    });
+    assert.equal(impossibleMonthlyByDay.status, 400);
+    assert.equal(impossibleMonthlyByDay.body.error.code, "INVALID_RECURRENCE");
   } finally {
     await setup.close();
   }
