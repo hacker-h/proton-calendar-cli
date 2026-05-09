@@ -244,6 +244,82 @@ test("supports recurrence and expands instances in list responses", async () => 
   }
 });
 
+test("exDates do not consume recurrence count budget", async () => {
+  const setup = await createFixture();
+  try {
+    const scenarios = [
+      {
+        title: "Daily count no exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 4,
+          exDates: [],
+        },
+        expectedStarts: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-12T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Daily count some exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 4,
+          exDates: ["2026-03-10T09:00:00.000Z", "2026-03-12T09:00:00.000Z"],
+        },
+        expectedStarts: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-13T09:00:00.000Z",
+          "2026-03-14T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Daily count all-but-one exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 2,
+          exDates: [
+            "2026-03-09T09:00:00.000Z",
+            "2026-03-10T09:00:00.000Z",
+            "2026-03-11T09:00:00.000Z",
+          ],
+        },
+        expectedStarts: ["2026-03-12T09:00:00.000Z", "2026-03-13T09:00:00.000Z"],
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const created = await apiRequest(setup, "POST", "/v1/events", {
+        title: scenario.title,
+        start: "2026-03-09T09:00:00.000Z",
+        end: "2026-03-09T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: scenario.recurrence,
+      });
+      assert.equal(created.status, 201);
+    }
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-16T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    for (const scenario of scenarios) {
+      const starts = listed.body.data.events
+        .filter((event) => event.title === scenario.title)
+        .map((event) => event.occurrenceStart);
+      assert.deepEqual(starts, scenario.expectedStarts);
+    }
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports pagination on expanded recurrence instances", async () => {
   const setup = await createFixture();
   try {

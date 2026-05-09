@@ -632,18 +632,19 @@ function generateOccurrences(event, rangeStart, rangeEnd) {
     }
 
     generatedCount += 1;
-    emitted += 1;
+
+    if (candidateMs >= rangeEndMs) {
+      break;
+    }
 
     if (exDateSet.has(candidateIso)) {
       continue;
     }
 
+    emitted += 1;
+
     if (candidateMs >= rangeStartMs && candidateMs < rangeEndMs) {
       results.push(candidateIso);
-    }
-
-    if (candidateMs >= rangeEndMs) {
-      break;
     }
   }
 
