@@ -1,3 +1,10 @@
+## [1.0.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.0...v1.0.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* guard locked git-crypt secret sync ([6794456](https://github.com/hacker-h/proton-calendar-cli/commit/6794456148611df13f470f12bab955cd503f7100)), closes [#32](https://github.com/hacker-h/proton-calendar-cli/issues/32)
+
 # 1.0.0 (2026-05-09)
 
 
