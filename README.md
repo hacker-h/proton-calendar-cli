@@ -31,6 +31,8 @@ pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
 - `secrets/pc-cli.json`
 - `secrets/pc-server.env`
 
+The generated API token is written only to the local config/env files; it is not printed in normal `pc login` output.
+
 `pnpm add -g .` registers this checkout's package bin so `pc` is available on your `PATH`. If `pc` is not found, check `pnpm bin -g` and run `pnpm setup` if pnpm has not configured `PNPM_HOME` yet. Local development fallback: `pnpm pc -- <command>` or `node src/cli.js <command>`.
 
 ## Commands
