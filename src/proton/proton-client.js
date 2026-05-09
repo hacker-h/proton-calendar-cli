@@ -100,7 +100,7 @@ export class ProtonCalendarClient {
     return this.#toEventModel(context, payload.Event);
   }
 
-  async createEvent({ calendarId, event }) {
+  async createEvent({ calendarId, event, idempotencyKey }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
 
@@ -142,14 +142,14 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
 
     const created = assertSyncEventResponse(response);
     return this.#toEventModel(context, created);
   }
 
-  async updateEvent({ calendarId, eventId, patch, scope = "series", occurrenceStart = null }) {
+  async updateEvent({ calendarId, eventId, patch, idempotencyKey, scope = "series", occurrenceStart = null }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
 
@@ -217,14 +217,14 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
 
     const updated = assertSyncEventResponse(response);
     return this.#toEventModel(context, updated);
   }
 
-  async deleteEvent({ calendarId, eventId, scope = "series", occurrenceStart = null }) {
+  async deleteEvent({ calendarId, eventId, idempotencyKey, scope = "series", occurrenceStart = null }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
     const body = {
@@ -241,7 +241,7 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
     assertSyncDeleteResponse(response);
     return null;
