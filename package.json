@@ -10,6 +10,8 @@
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
     "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
     "pc": "node src/cli.js",
+    "release": "semantic-release",
+    "release:dry-run": "semantic-release --dry-run --debug",
     "start": "node src/index.js",
     "test": "node --test \"test/*.test.js\"",
     "test:unit": "node --test \"test/*.test.js\"",
@@ -18,7 +20,11 @@
     "test:live:cli": "node --test \"test/live/cli.live.test.js\""
   },
   "devDependencies": {
+    "@semantic-release/commit-analyzer": "^13.0.1",
+    "@semantic-release/github": "^12.0.6",
+    "@semantic-release/release-notes-generator": "^14.1.0",
     "playwright": "^1.54.2",
+    "semantic-release": "^25.0.3",
     "sweetlink": "^0.2.0"
   },
   "dependencies": {

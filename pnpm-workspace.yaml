@@ -1,3 +1,8 @@
+allowBuilds:
+  keytar: true
+  puppeteer: false
+  sqlite3: true
+  tldjs: false
 onlyBuiltDependencies:
   - keytar
   - sqlite3
