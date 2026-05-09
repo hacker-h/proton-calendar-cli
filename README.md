@@ -1,6 +1,6 @@
 # proton-calendar-cli
 
-Goal: a full-featured command-line tool for Proton Calendar.
+Goal: a full-featured personal automation command-line tool for Proton Calendar.
 
 `pc` lets you log in, list events, create events, patch only the fields you change, and delete events from Proton Calendar. It also supports multi-calendar routing, recurring events, scoped recurrence edits, and JSON output for automation.
 
@@ -130,13 +130,18 @@ The lock prevents multiple processes from opening Chrome at once; the cooldown a
 
 ## Automation Contract
 
-Automation callers should treat `pc` as a JSON command surface:
+Automation callers should treat `pc` as a JSON command surface with private-API risk:
 
 - Success output goes to stdout as `{ "data": ... }`.
 - Error output goes to stderr as `{ "error": { "code", "message", "details" } }`.
 - `error.code` is the stable key for scripts; `error.message` is for humans.
 - Passwords, cookie values, refresh tokens, session blobs, bearer tokens, and raw Proton payloads must not appear in normal output, logs, or CI artifacts.
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
+- Run `pc doctor auth` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
+- Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
+- Use `X-Idempotency-Key` for HTTP API mutation retries when available; the CLI does not expose an idempotency flag yet, so retry CLI mutations only after checking whether the event already changed.
+- Back off on auth challenges, rate limits, `Retry-After`, captcha, or human-verification states. Do not loop through repeated browser logins.
+- Treat Proton private API shape drift as expected operational failure. Alert, preserve sanitized logs, and require human triage instead of silently continuing.
 
 Exit codes:
 
@@ -151,6 +156,29 @@ Exit codes:
 | `6` | Reserved for unsupported private-API state or login challenge |
 
 Current commands return `1` for all failures; future behavior should move toward the narrower reserved codes without changing the JSON envelopes.
+
+
+## Automation Guardrails
+
+`pc` is best suited for personal or small-team automation where failures can be inspected quickly. Do not rely on it as a stable public SaaS integration contract. Proton can require new interactive login steps, change private endpoints, throttle requests, or reject saved browser sessions.
+
+Recommended CI/CD pattern:
+
+```bash
+set -euo pipefail
+pc doctor auth -o json
+pc ls --from 2026-07-01 --to 2026-07-07 -o json
+pc new title="Deploy window" start=2026-07-02T10:00:00Z end=2026-07-02T10:30:00Z timezone=UTC -o json
+```
+
+Operational defaults:
+
+- Use a dedicated Proton calendar/account for automation when possible.
+- Keep date windows small and bounded; do not scan whole calendars on every run.
+- Keep secrets under `secrets/` or CI secret storage and never upload cookie bundles as artifacts.
+- Fail closed when output is not valid JSON or when `error.code` is unknown.
+- For scheduled jobs, add exponential backoff and notify a human after the first auth or private-API drift failure.
+- Keep live Proton checks separate from required pull-request CI unless the runner has dedicated credentials and safe cleanup.
 
 ## Development
 
@@ -183,7 +211,10 @@ pnpm run release:dry-run
 ## Current Limitations
 
 - Requires a local API server; normal event commands do not talk directly to Proton.
+- Uses unofficial private Proton endpoints that can change without a compatibility window.
 - Login/bootstrap depends on Chrome and local cookie/session export.
+- Browser login can stop on 2FA, captcha, human-verification, locked-account, or changed-UI states.
+- Rate limits and `Retry-After` behavior are controlled by Proton and should stop automation until backoff expires.
 - `recurrence.count` and `recurrence.until` cannot both be set.
 - No attendee invitation flow, RSVP state, reminder controls, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
