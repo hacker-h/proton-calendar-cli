@@ -1,5 +1,5 @@
 import http from "node:http";
-import { randomUUID } from "node:crypto";
+import { randomUUID, timingSafeEqual } from "node:crypto";
 import { assertConfig } from "./config.js";
 import { ApiError, isApiError, toErrorPayload } from "./errors.js";
 import { ProtonCalendarClient } from "./proton/proton-client.js";
@@ -201,9 +201,17 @@ function assertAuthorized(req, expectedToken) {
     throw new ApiError(401, "UNAUTHORIZED", "Missing bearer token");
   }
   const token = header.slice("Bearer ".length).trim();
-  if (token !== expectedToken) {
+  if (!isBearerTokenAuthorized(token, expectedToken)) {
     throw new ApiError(401, "UNAUTHORIZED", "Invalid bearer token");
   }
+}
+
+function isBearerTokenAuthorized(token, expectedToken) {
+  const expected = Buffer.from(expectedToken, "utf8");
+  const actual = Buffer.from(token, "utf8");
+  const comparable = actual.length === expected.length ? actual : Buffer.alloc(expected.length);
+
+  return timingSafeEqual(comparable, expected) && actual.length === expected.length;
 }
 
 function parseEventRoute(pathname) {

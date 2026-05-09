@@ -29,6 +29,31 @@ test("requires bearer auth for calendar endpoints", async () => {
   }
 });
 
+test("rejects wrong-content and wrong-length bearer tokens", async () => {
+  const setup = await createFixture();
+  try {
+    for (const token of ["test-tokem", "toolong-token", "tok"]) {
+      const response = await fetch(
+        `${setup.api.baseUrl}/v1/events?start=2026-01-01T00:00:00.000Z&end=2026-01-02T00:00:00.000Z`,
+        {
+          headers: {
+            Authorization: `Bearer ${token}`,
+          },
+        }
+      );
+      assert.equal(response.status, 401);
+
+      const payload = await response.json();
+      assert.equal(payload.error.code, "UNAUTHORIZED");
+    }
+
+    const authorized = await apiRequest(setup, "GET", "/v1/auth/status");
+    assert.equal(authorized.status, 200);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reports auth status and calendar scope configuration", async () => {
   const setup = await createFixture({
     targetCalendarId: null,
