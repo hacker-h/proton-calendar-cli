@@ -1505,7 +1505,7 @@ function parseAssignmentValue(raw) {
       return value;
     }
   }
-  return value;
+  return trimmed;
 }
 
 function setPathValue(target, parts, value) {
@@ -1788,10 +1788,11 @@ function parseJsonObject(raw, errorMessage) {
 
 function requireValue(args, index, option) {
   const value = args[index];
-  if (value === undefined || value === null || String(value).trim() === "") {
+  const trimmed = value === undefined || value === null ? "" : String(value).trim();
+  if (trimmed === "") {
     throw new CliError("INVALID_ARGS", `${option} requires a value`);
   }
-  return value;
+  return trimmed;
 }
 
 function writeOutput(stdout, output, payload) {
