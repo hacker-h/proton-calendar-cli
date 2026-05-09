@@ -95,7 +95,8 @@ test("login bootstraps cookies and writes local config/env files", async () => {
   assert.equal(envFile.includes("# export PROTON_RELOGIN_MODE=\"headless\""), true);
 
   const payload = JSON.parse(stdout.value());
-  assert.equal(payload.data.apiToken, "token-123");
+  assert.equal(Object.hasOwn(payload.data, "apiToken"), false);
+  assert.equal(stdout.value().includes("token-123"), false);
   assert.equal(payload.data.targetCalendarId, "cal-1");
   assert.deepEqual(payload.data.nextSteps, [
     `source ${serverEnvPath}`,
@@ -892,6 +893,202 @@ test("edit supports --patch @file and assignment overrides", async () => {
     title: "From file",
     description: "",
     location: "Room B",
+  });
+});
+
+test("new rejects invalid --tz before API call", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    [
+      "new",
+      "title=Bad timezone",
+      "start=2026-04-09T09:00:00.000Z",
+      "end=2026-04-09T10:00:00.000Z",
+      "--tz",
+      "Europe/Berln",
+    ],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not be called");
+      },
+      stdout,
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.value(), "");
+  assert.equal(apiCalled, false);
+
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_TIMEZONE");
+  assert.match(payload.error.message, /Europe\/Berln/);
+});
+
+test("new accepts UTC and IANA timezone inputs", async () => {
+  for (const timezone of ["UTC", "America/New_York"]) {
+    const requests = [];
+    const stdout = createWriter();
+    const stderr = createWriter();
+
+    const exitCode = await runPcCli(
+      [
+        "new",
+        `title=${timezone} event`,
+        "start=2026-04-09T09:00:00.000Z",
+        "end=2026-04-09T10:00:00.000Z",
+        "--tz",
+        timezone,
+      ],
+      {
+        env: {
+          PC_API_BASE_URL: "http://127.0.0.1:8787",
+          PC_API_TOKEN: "token",
+        },
+        fetchImpl: async (url, init) => {
+          requests.push({ url: new URL(String(url)), init });
+          return jsonResponse(201, { data: { id: `evt-${timezone}`, timezone } });
+        },
+        stdout,
+        stderr,
+      }
+    );
+
+    assert.equal(exitCode, 0);
+    assert.equal(stderr.value(), "");
+    assert.equal(requests.length, 1);
+
+    const body = JSON.parse(String(requests[0].init.body));
+    assert.equal(body.timezone, timezone);
+
+    const payload = JSON.parse(stdout.value());
+    assert.equal(payload.data.timezone, timezone);
+  }
+});
+
+test("new rejects GMT edge case as non-IANA input", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    [
+      "new",
+      "title=GMT edge",
+      "start=2026-04-09T09:00:00.000Z",
+      "end=2026-04-09T10:00:00.000Z",
+      "--tz",
+      "GMT",
+    ],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not be called");
+      },
+      stdout: createWriter(),
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 1);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_TIMEZONE");
+});
+
+test("new without timezone preserves default UTC behavior", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(
+    [
+      "new",
+      "title=Default timezone",
+      "start=2026-04-09T09:00:00.000Z",
+      "end=2026-04-09T10:00:00.000Z",
+    ],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url: new URL(String(url)), init });
+        return jsonResponse(201, { data: { id: "evt-default" } });
+      },
+      stdout: createWriter(),
+      stderr: createWriter(),
+    }
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests.length, 1);
+  assert.equal(JSON.parse(String(requests[0].init.body)).timezone, "UTC");
+});
+
+test("edit validates timezone flag, assignment, and patch file inputs", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-timezone-test-"));
+  const patchPath = path.join(tmpDir, "patch.json");
+  await writeFile(patchPath, `${JSON.stringify({ timezone: "Eastern Standard Time" }, null, 2)}\n`);
+
+  for (const args of [
+    ["edit", "evt-1", "--tz", "Europe/Berln"],
+    ["edit", "evt-1", "tz=Europe/Berln"],
+    ["edit", "evt-1", "--patch", `@${patchPath}`],
+  ]) {
+    const stderr = createWriter();
+    let apiCalled = false;
+
+    const exitCode = await runPcCli(args, {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not be called");
+      },
+      stdout: createWriter(),
+      stderr,
+    });
+
+    assert.equal(exitCode, 1);
+    assert.equal(apiCalled, false);
+    assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_TIMEZONE");
+  }
+});
+
+test("edit without timezone preserves floating patch behavior", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(["edit", "evt-1", "title=Floating update"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, { data: { id: "evt-1", title: "Floating update" } });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests.length, 1);
+
+  const body = JSON.parse(String(requests[0].init.body));
+  assert.deepEqual(body, {
+    title: "Floating update",
   });
 });
 

@@ -1,3 +1,39 @@
+## [1.0.8](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.7...v1.0.8) (2026-05-09)
+
+
+### Bug Fixes
+
+* support monthly byday recurrence ([4fa2c99](https://github.com/hacker-h/proton-calendar-cli/commit/4fa2c99b33e44b910a6c0458cc34665ab8dc3e70))
+
+## [1.0.7](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.6...v1.0.7) (2026-05-09)
+
+
+### Bug Fixes
+
+* cap recurrence candidate iteration ([8f3c841](https://github.com/hacker-h/proton-calendar-cli/commit/8f3c841d371148c4a3a2ca743b231f05e976c19f))
+
+## [1.0.6](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.5...v1.0.6) (2026-05-09)
+
+
+### Bug Fixes
+
+* support monthly BYDAY recurrence ([773b7f2](https://github.com/hacker-h/proton-calendar-cli/commit/773b7f25fddd9c9e12275c852ba3da1cd2cad588)), closes [#42](https://github.com/hacker-h/proton-calendar-cli/issues/42)
+
+## [1.0.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.4...v1.0.5) (2026-05-09)
+
+
+### Bug Fixes
+
+* validate CLI timezone inputs ([089ae4f](https://github.com/hacker-h/proton-calendar-cli/commit/089ae4fde3751ef5c0525808f97b411a6b2dccf7))
+
+## [1.0.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.3...v1.0.4) (2026-05-09)
+
+
+### Bug Fixes
+
+* exclude exdates from count budget ([bb4a622](https://github.com/hacker-h/proton-calendar-cli/commit/bb4a62207cafe20cb342edc9581a12e1a5e5215e))
+* redact login token from stdout ([104763d](https://github.com/hacker-h/proton-calendar-cli/commit/104763d4e2be2dc9041d47ea9620eedd0783bc69))
+
 ## [1.0.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.2...v1.0.3) (2026-05-09)
 
 

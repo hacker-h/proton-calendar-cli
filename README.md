@@ -31,6 +31,8 @@ pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
 - `secrets/pc-cli.json`
 - `secrets/pc-server.env`
 
+The generated API token is written only to the local config/env files; it is not printed in normal `pc login` output.
+
 `pnpm add -g .` registers this checkout's package bin so `pc` is available on your `PATH`. If `pc` is not found, check `pnpm bin -g` and run `pnpm setup` if pnpm has not configured `PNPM_HOME` yet. Local development fallback: `pnpm pc -- <command>` or `node src/cli.js <command>`.
 
 ## Commands
@@ -70,6 +72,8 @@ Supported event fields:
 - `protected` (defaults to `true`; set `false` to allow shared-calendar members to edit)
 - `recurrence` with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
 
+For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
+
 Recurring event scopes are `series`, `single`, and `following`. `single` and `following` require an occurrence start:
 
 ```bash
@@ -83,6 +87,7 @@ Notes:
 - `pc edit` is PATCH-style: omitted fields are not sent.
 - `pc edit --clear` currently supports `description` and `location`.
 - Supported recurrence frequencies are `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY`.
+- Recurrence expansion evaluates at most 50,000 candidates by default; set `RECURRENCE_MAX_ITERATIONS` on the API server to tune that safety cap. If the cap is exhausted, the API returns `RECURRENCE_ITERATION_LIMIT` instead of a partial recurrence list.
 
 ## Configuration And Auth
 
@@ -190,7 +195,7 @@ pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
-Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout and verifies `pc --help` plus a JSON config-error path from the installed tarball.
+Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package.
 
 The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, and then runs live tests. Pull requests do not require these secrets or the live canary.
 

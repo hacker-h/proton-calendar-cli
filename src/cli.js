@@ -16,6 +16,7 @@ const DEFAULT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies.json";
 const DEFAULT_PROTON_BASE_URL = "https://calendar.proton.me";
 const DEFAULT_TIMEOUT_MS = 15000;
 const CLEARABLE_FIELDS = new Set(["description", "location"]);
+const VALID_TIMEZONES = new Set(["UTC", ...Intl.supportedValuesOf("timeZone")]);
 
 const HELP_TEXT = `pc - Proton Calendar CLI
 
@@ -23,8 +24,8 @@ Usage:
   pc login [options]
   pc doctor auth [options]
   pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
-  pc new <field=value...>
-  pc edit <eventId> <field=value...> [--clear FIELD]
+  pc new <field=value...> [--tz TIMEZONE]
+  pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD]
   pc rm <eventId>
 
 Examples:
@@ -226,7 +227,6 @@ async function runLoginCommand(args, context) {
         login: "ok",
         uid,
         targetCalendarId,
-        apiToken,
         cookieBundlePath: parsed.cookieBundlePath,
         pcConfigPath: parsed.pcConfigPath,
         serverEnvPath: parsed.serverEnvPath,
@@ -1304,6 +1304,7 @@ async function parseMutationArgs(args, options = {}) {
     eventId: null,
     scope: null,
     occurrenceStart: null,
+    timezone: null,
     patchInput: null,
     clearFields: [],
     assignments: [],
@@ -1336,6 +1337,10 @@ async function parseMutationArgs(args, options = {}) {
       state.occurrenceStart = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--tz" || token === "--timezone") {
+      state.timezone = requireValue(args, ++i, token);
+      continue;
+    }
     if (token === "--patch") {
       state.patchInput = requireValue(args, ++i, token);
       continue;
@@ -1362,9 +1367,15 @@ async function parseMutationArgs(args, options = {}) {
     ...assignmentPatch,
   };
 
+  if (state.timezone !== null) {
+    patch.timezone = state.timezone;
+  }
+
   for (const field of state.clearFields) {
     patch[field] = "";
   }
+
+  validateTimezonePatch(patch);
 
   return {
     output: normalizeOutput(state.output),
@@ -1473,6 +1484,17 @@ function normalizeFieldPath(raw) {
     return "timezone";
   }
   return key;
+}
+
+function validateTimezonePatch(patch) {
+  if (!Object.hasOwn(patch, "timezone")) {
+    return;
+  }
+
+  const timezone = patch.timezone;
+  if (typeof timezone !== "string" || !VALID_TIMEZONES.has(timezone)) {
+    throw new CliError("INVALID_TIMEZONE", `timezone must be UTC or a valid IANA time zone: ${timezone}`);
+  }
 }
 
 function normalizeClearField(raw) {
