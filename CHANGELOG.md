@@ -1,3 +1,10 @@
+## [1.2.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.0...v1.2.1) (2026-05-09)
+
+
+### Bug Fixes
+
+* harden cli validation contract ([e2470a8](https://github.com/hacker-h/proton-calendar-cli/commit/e2470a82284f4cfe3847bcf5fd6c96add6fc9217))
+
 # [1.2.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.1.0...v1.2.0) (2026-05-09)
 
 
