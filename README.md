@@ -184,12 +184,15 @@ Operational defaults:
 
 ```bash
 pnpm test              # mocked/unit suite
+pnpm run test:unit:junit # mocked/unit suite with reports/junit.xml
 pnpm run ci:local      # unit suite + package/bin smoke
 pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
-Pull-request CI runs only the no-quota local gate. Live Proton checks need dedicated credentials and should stay scheduled/manual unless the workflow explicitly opts in.
+Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout and verifies `pc --help` plus a JSON config-error path from the installed tarball.
+
+The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, and then runs live tests. Pull requests do not require these secrets or the live canary.
 
 ## Releases
 

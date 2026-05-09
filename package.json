@@ -28,7 +28,8 @@
     "test:unit": "node --test \"test/*.test.js\"",
     "test:live": "node --test \"test/live/**/*.test.js\"",
     "test:live:api": "node --test \"test/live/api.live.test.js\"",
-    "test:live:cli": "node --test \"test/live/cli.live.test.js\""
+    "test:live:cli": "node --test \"test/live/cli.live.test.js\"",
+    "test:unit:junit": "mkdir -p reports && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=reports/junit.xml \"test/*.test.js\""
   },
   "devDependencies": {
     "@semantic-release/changelog": "^6.0.3",
