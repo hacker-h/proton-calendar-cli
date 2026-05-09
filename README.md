@@ -30,6 +30,26 @@ Verify remotes:
 git remote -v
 ```
 
+## Automatic releases
+
+Releases are automated from the GitHub `main` branch with semantic-release.
+Merging Conventional Commit messages such as `feat: ...`, `fix: ...`, and
+`feat!: ...` to `main` creates the next GitHub release and `v<version>` tag.
+
+This package remains private and is not published to npm. The release version is
+derived from git history and tags; `package.json` is not bumped during releases.
+
+The GitHub Actions release workflow runs the unit test suite before publishing a
+release. It uses the repository-provided `GITHUB_TOKEN`; no `NPM_TOKEN` is
+required unless npm publishing is enabled later.
+
+Local release checks:
+
+```bash
+pnpm test:unit
+pnpm run release:dry-run
+```
+
 ## Quickstart
 
 1) Install dependencies:
