@@ -499,10 +499,15 @@
         "data": {
           "topic": "auth",
           "status": "refresh_recovered",
+          "automationReady": true,
           "reloginRequired": false,
           "refreshPossible": true,
           "refreshAttempted": true,
           "refreshSucceeded": true,
+          "nextStep": {
+            "code": "proceed",
+            "message": "Auth is ready for unattended calendar operations."
+          },
           "uid": "uid-1",
           "host": "https://calendar.proton.me",
           "uidCandidates": ["uid-1"],
@@ -542,7 +547,7 @@
               }
             ]
           },
-          "suggestions": ["Auth looks recoverable with current refresh cookies."]
+          "suggestions": ["Auth is ready for unattended calendar operations."]
         }
       },
       "stderr": ""
