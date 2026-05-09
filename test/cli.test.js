@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runPcCli } from "../src/cli.js";
@@ -30,6 +30,7 @@ test("login bootstraps cookies and writes local config/env files", async () => {
       2
     )}\n`
   );
+  await chmod(cookieBundlePath, 0o600);
 
   const bootstrapCalls = [];
   const stdout = createWriter();
@@ -127,6 +128,7 @@ test("authorize alias works for login", async () => {
       2
     )}\n`
   );
+  await chmod(cookieBundlePath, 0o600);
 
   const exitCode = await runPcCli(["authorize", "--cookie-bundle", cookieBundlePath], {
     env: {
@@ -178,6 +180,7 @@ test("doctor auth reports access valid when calendar probe succeeds", async () =
       2
     )}\n`
   );
+  await chmod(cookieBundlePath, 0o600);
 
   const exitCode = await runPcCli(["doctor", "auth", "--cookie-bundle", cookieBundlePath], {
     env: {},
@@ -227,6 +230,7 @@ test("doctor auth detects refresh recovery path", async () => {
       2
     )}\n`
   );
+  await chmod(cookieBundlePath, 0o600);
 
   const stdout = createWriter();
   const exitCode = await runPcCli(["doctor", "auth", "--cookie-bundle", cookieBundlePath], {
@@ -288,6 +292,7 @@ test("doctor auth reports relogin required when refresh is unavailable", async (
       2
     )}\n`
   );
+  await chmod(cookieBundlePath, 0o600);
 
   const stdout = createWriter();
   const exitCode = await runPcCli(["doctor", "auth", "--cookie-bundle", cookieBundlePath], {
@@ -1252,6 +1257,7 @@ test("loads API token/base URL from local config file", async () => {
     configPath,
     `${JSON.stringify({ apiBaseUrl: "http://127.0.0.1:9900", apiToken: "file-token" }, null, 2)}\n`
   );
+  await chmod(configPath, 0o600);
 
   const requests = [];
   const exitCode = await runPcCli(["ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"], {
@@ -1275,6 +1281,78 @@ test("loads API token/base URL from local config file", async () => {
   assert.equal(requests.length, 1);
   assert.equal(requests[0].url.origin, "http://127.0.0.1:9900");
   assert.equal(requests[0].init.headers.Authorization, "Bearer file-token");
+});
+
+test("unsafe local config permissions are rejected before API calls", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX permission bits are not reliable on Windows");
+    return;
+  }
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-config-permissions-test-"));
+  const configPath = path.join(tmpDir, "pc-cli.json");
+  await writeFile(
+    configPath,
+    `${JSON.stringify({ apiBaseUrl: "http://127.0.0.1:9900", apiToken: "file-token" }, null, 2)}\n`
+  );
+  await chmod(configPath, 0o644);
+
+  const requests = [];
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"], {
+    env: { PC_CONFIG_PATH: configPath },
+    fetchImpl: async (url, init) => {
+      requests.push({ url, init });
+      return jsonResponse(200, { data: { events: [], nextCursor: null } });
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(requests.length, 0);
+  assert.equal(JSON.parse(stderr.value()).error.code, "SECRET_FILE_UNSAFE_PERMISSIONS");
+});
+
+test("logout removes configured local secret files and reports missing sidecars", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-logout-test-"));
+  const cookieBundlePath = path.join(tmpDir, "cookies.json");
+  const pcConfigPath = path.join(tmpDir, "pc-cli.json");
+  const serverEnvPath = path.join(tmpDir, "pc-server.env");
+  const reloginLockPath = `${cookieBundlePath}.relogin.lock`;
+
+  await writeFile(cookieBundlePath, "{}\n", { mode: 0o600 });
+  await writeFile(pcConfigPath, "{}\n", { mode: 0o600 });
+  await writeFile(serverEnvPath, "TOKEN=value\n", { mode: 0o600 });
+  await writeFile(reloginLockPath, "lock\n", { mode: 0o600 });
+
+  const stdout = createWriter();
+  const exitCode = await runPcCli([
+    "logout",
+    "--cookie-bundle",
+    cookieBundlePath,
+    "--pc-config",
+    pcConfigPath,
+    "--server-env",
+    serverEnvPath,
+  ], {
+    env: {},
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.logout, "ok");
+  assert.deepEqual(
+    payload.data.removed.map((item) => item.kind),
+    ["cliConfig", "serverEnv", "cookieBundle", "reloginLock"]
+  );
+  assert.deepEqual(payload.data.missing.map((item) => item.kind), ["reloginState"]);
+
+  for (const filePath of [cookieBundlePath, pcConfigPath, serverEnvPath, reloginLockPath]) {
+    await assert.rejects(() => readFile(filePath, "utf8"), { code: "ENOENT" });
+  }
 });
 
 test("returns API_UNREACHABLE when API is down", async () => {

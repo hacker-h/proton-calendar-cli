@@ -1,6 +1,7 @@
 import { readFile, stat, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { ApiError } from "../errors.js";
+import { assertSafeSecretFile, chmodOwnerOnly } from "../secret-file-safety.js";
 
 export class CookieSessionStore {
   constructor(options) {
@@ -162,6 +163,7 @@ export class CookieSessionStore {
     this.cookies = [...map.values()].sort((a, b) => cookieKey(a).localeCompare(cookieKey(b)));
     this.bundle = buildUpdatedBundle(this.bundle, this.cookies);
     await writeFile(this.cookieBundlePath, `${JSON.stringify(this.bundle, null, 2)}\n`, { mode: 0o600 });
+    await chmodOwnerOnly(this.cookieBundlePath);
 
     const fileStat = await stat(this.cookieBundlePath);
     this.cachedMtimeMs = fileStat.mtimeMs;
@@ -191,6 +193,11 @@ export class CookieSessionStore {
     if (fileStat.mtimeMs === this.cachedMtimeMs) {
       return;
     }
+
+    await assertSafeSecretFile(this.cookieBundlePath, {
+      fileStat,
+      createError: (message, details) => new ApiError(401, "SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
 
     let raw;
     try {

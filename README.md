@@ -33,6 +33,16 @@ pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
 
 The generated API token is written only to the local config/env files; it is not printed in normal `pc login` output.
 
+Secret files are expected to be owner-only readable/writable on POSIX systems, for example `0600`. The CLI and API reject unsafe group/world-readable cookie bundles and local config files with `SECRET_FILE_UNSAFE_PERMISSIONS` before using them.
+
+To remove local generated secrets without deleting the parent `secrets/` directory or browser profiles, run:
+
+```bash
+pc logout
+```
+
+`pc logout` removes the configured/default CLI config, server env file, cookie bundle, and known relogin sidecars, reporting files that were already missing.
+
 `pnpm add -g .` registers this checkout's package bin so `pc` is available on your `PATH`. If `pc` is not found, check `pnpm bin -g` and run `pnpm setup` if pnpm has not configured `PNPM_HOME` yet. Local development fallback: `pnpm pc -- <command>` or `node src/cli.js <command>`.
 
 ## Commands
@@ -40,6 +50,7 @@ The generated API token is written only to the local config/env files; it is not
 | Command | Purpose | Example |
 | --- | --- | --- |
 | `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --target-calendar cal_123` |
+| `pc logout` | Remove local CLI/server/cookie secret files and relogin sidecars | `pc logout` |
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
 | `pc ls` | List events; defaults to current ISO week | `pc ls w++ --title review` |
 | `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |

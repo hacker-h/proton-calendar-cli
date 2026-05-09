@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { CookieSessionStore } from "../src/session/cookie-session-store.js";
@@ -121,6 +121,34 @@ test("invalidate reloads updated cookies from disk", async () => {
   assert.equal(header.includes("AUTH-uid-1=new-value"), true);
 });
 
+test("unsafe cookie bundle permissions are rejected", async (t) => {
+  if (process.platform === "win32") {
+    t.skip("POSIX permission bits are not reliable on Windows");
+    return;
+  }
+
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cookie-store-permissions-test-"));
+  const bundlePath = path.join(tmpDir, "cookies.json");
+  await writeBundle(bundlePath, {
+    cookies: [
+      {
+        name: "AUTH-uid-1",
+        value: "value",
+        domain: "calendar.proton.me",
+        path: "/api/",
+        secure: true,
+      },
+    ],
+  });
+  await chmod(bundlePath, 0o644);
+
+  const store = new CookieSessionStore({ cookieBundlePath: bundlePath });
+  await assert.rejects(
+    () => store.getCookieHeader("https://calendar.proton.me/api/core/v4/users"),
+    (error) => error?.code === "SECRET_FILE_UNSAFE_PERMISSIONS" && error?.status === 401
+  );
+});
+
 async function writeBundle(filePath, payload) {
   await writeFile(
     filePath,
@@ -128,6 +156,7 @@ async function writeBundle(filePath, payload) {
       exportedAt: new Date().toISOString(),
       source: "test",
       ...payload,
-    }, null, 2)}\n`
+    }, null, 2)}\n`,
+    { mode: 0o600 }
   );
 }
