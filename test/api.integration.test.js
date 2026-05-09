@@ -298,6 +298,12 @@ test("supports monthly ordinal BYDAY recurrence expansion", async () => {
         expectedByDay: ["FR"],
         expectedStarts: ["2026-02-13T09:00:00.000Z", "2026-03-13T09:00:00.000Z"],
       },
+      {
+        title: "First Monday on first day",
+        recurrence: { freq: "MONTHLY", count: 1, byDay: ["+1MO"], byMonthDay: [1] },
+        expectedByDay: ["+1MO"],
+        expectedStarts: ["2026-06-01T09:00:00.000Z"],
+      },
     ];
 
     for (const scenario of scenarios) {
@@ -465,6 +471,76 @@ test("exDates do not consume recurrence count budget", async () => {
         .map((event) => event.occurrenceStart);
       assert.deepEqual(starts, scenario.expectedStarts);
     }
+  } finally {
+    await setup.close();
+  }
+});
+
+test("recurrence expansion stops when candidate iteration cap is exhausted", async () => {
+  const setup = await createFixture({ recurrenceMaxIterations: 3 });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Excluded daily series",
+      start: "2026-03-09T09:00:00.000Z",
+      end: "2026-03-09T09:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "DAILY",
+        count: 2,
+        exDates: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-12T09:00:00.000Z",
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-20T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 422);
+    assert.equal(listed.body.error.code, "RECURRENCE_ITERATION_LIMIT");
+    assert.equal(listed.body.error.details.maxIterations, 3);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("near-all-excluded recurrence emits after skipped candidates before cap", async () => {
+  const setup = await createFixture({ recurrenceMaxIterations: 6 });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Mostly excluded daily series",
+      start: "2026-03-09T09:00:00.000Z",
+      end: "2026-03-09T09:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "DAILY",
+        count: 2,
+        exDates: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-20T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "Mostly excluded daily series")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, ["2026-03-12T09:00:00.000Z", "2026-03-13T09:00:00.000Z"]);
   } finally {
     await setup.close();
   }
@@ -696,6 +772,26 @@ test("validates recurrence constraints and scope requirements", async () => {
     });
     assert.equal(badRecurrence.status, 400);
     assert.equal(badRecurrence.body.error.code, "INVALID_RECURRENCE");
+
+    const weeklyOrdinalByDay = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad weekly byDay",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "WEEKLY", byDay: ["+1MO"] },
+    });
+    assert.equal(weeklyOrdinalByDay.status, 400);
+    assert.equal(weeklyOrdinalByDay.body.error.code, "INVALID_RECURRENCE");
+
+    const monthlyOrdinalOutOfRange = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad monthly ordinal byDay",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "MONTHLY", byDay: ["+6MO"] },
+    });
+    assert.equal(monthlyOrdinalOutOfRange.status, 400);
+    assert.equal(monthlyOrdinalOutOfRange.body.error.code, "INVALID_RECURRENCE");
 
     const created = await apiRequest(setup, "POST", "/v1/events", {
       title: "Good recurrence",
@@ -973,6 +1069,7 @@ async function createFixture(options = {}) {
       protonBaseUrl: proton.baseUrl,
       protonTimeoutMs: 3000,
       protonMaxRetries: 0,
+      recurrenceMaxIterations: options.recurrenceMaxIterations,
     },
     { port: 0, protonClient: proton.client, sessionStore }
   );
