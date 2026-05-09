@@ -40,7 +40,7 @@ test("doctor auth golden fixture locks refresh recovery output", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-contract-doctor-"));
   const cookieBundlePath = path.join(tmpDir, "cookies.json");
 
-  await writeFile(cookieBundlePath, `${JSON.stringify(createDoctorCookieBundle(), null, 2)}\n`);
+  await writeFile(cookieBundlePath, `${JSON.stringify(createDoctorCookieBundle(), null, 2)}\n`, { mode: 0o600 });
 
   const stdout = createWriter();
   const stderr = createWriter();

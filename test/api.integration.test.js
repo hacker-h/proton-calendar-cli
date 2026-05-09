@@ -1209,7 +1209,7 @@ async function writeCookieBundle(filePath, domain, sessionValue) {
     ],
   };
 
-  await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`);
+  await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
 }
 
 function createMockProtonClient(options) {
