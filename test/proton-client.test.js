@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
 import {
   buildCreateSyncRequestBody,
   buildSharedParts,
@@ -46,7 +47,7 @@ test("authStatus uses UID candidate, cookies, and Proton headers", async () => {
   assert.equal(requests.length, 2);
   const headers = requests[0].init.headers;
   assert.equal(headers["x-pm-uid"], "uid-123");
-  assert.equal(headers["x-pm-appversion"], "web-calendar@5.0.101.3");
+  assert.equal(headers["x-pm-appversion"], DEFAULT_PROTON_APP_VERSION);
   assert.equal(headers.Cookie, "pm-session=valid; pm-auth=valid");
 });
 
