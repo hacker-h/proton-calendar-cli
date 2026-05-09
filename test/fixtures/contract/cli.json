@@ -1,0 +1,551 @@
+{
+  "cases": [
+    {
+      "name": "list current week success",
+      "argv": ["ls"],
+      "now": "2026-03-11T15:00:00.000Z",
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-1",
+                "title": "Design review",
+                "start": "2026-03-11T10:00:00.000Z",
+                "end": "2026-03-11T10:30:00.000Z",
+                "location": "Room A",
+                "protected": true
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-03-09T00:00:00.000Z",
+          "end": "2026-03-16T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-1",
+                "title": "Design review",
+                "start": "2026-03-11T10:00:00.000Z",
+                "end": "2026-03-11T10:30:00.000Z",
+                "location": "Room A",
+                "protected": true
+              }
+            ],
+            "count": 1,
+            "range": {
+              "start": "2026-03-09T00:00:00.000Z",
+              "end": "2026-03-16T00:00:00.000Z"
+            },
+            "calendarId": null
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "create event success",
+      "argv": [
+        "new",
+        "title=Design review",
+        "start=2026-03-10T10:00:00Z",
+        "end=2026-03-10T10:30:00Z",
+        "timezone=UTC",
+        "protected=false"
+      ],
+      "apiResponse": {
+        "status": 201,
+        "body": {
+          "data": {
+            "id": "evt-2",
+            "calendarId": "assistant-calendar",
+            "title": "Design review",
+            "start": "2026-03-10T10:00:00.000Z",
+            "end": "2026-03-10T10:30:00.000Z",
+            "timezone": "UTC",
+            "protected": false
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "POST",
+        "pathname": "/v1/events",
+        "body": {
+          "title": "Design review",
+          "start": "2026-03-10T10:00:00Z",
+          "end": "2026-03-10T10:30:00Z",
+          "timezone": "UTC",
+          "protected": false
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "id": "evt-2",
+            "calendarId": "assistant-calendar",
+            "title": "Design review",
+            "start": "2026-03-10T10:00:00.000Z",
+            "end": "2026-03-10T10:30:00.000Z",
+            "timezone": "UTC",
+            "protected": false
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "list protected filter success",
+      "argv": ["ls", "--protected", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-protected",
+                "title": "Private planning",
+                "start": "2026-03-10T09:00:00.000Z",
+                "end": "2026-03-10T09:30:00.000Z",
+                "protected": true
+              },
+              {
+                "id": "evt-public",
+                "title": "Public demo",
+                "start": "2026-03-10T11:00:00.000Z",
+                "end": "2026-03-10T11:30:00.000Z",
+                "protected": false
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-03-10T00:00:00.000Z",
+          "end": "2026-03-11T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-protected",
+                "title": "Private planning",
+                "start": "2026-03-10T09:00:00.000Z",
+                "end": "2026-03-10T09:30:00.000Z",
+                "protected": true
+              }
+            ],
+            "count": 1,
+            "range": {
+              "start": "2026-03-10T00:00:00.000Z",
+              "end": "2026-03-11T00:00:00.000Z"
+            },
+            "calendarId": null
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "list unprotected filter success",
+      "argv": ["ls", "--unprotected", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-protected",
+                "title": "Private planning",
+                "start": "2026-03-10T09:00:00.000Z",
+                "end": "2026-03-10T09:30:00.000Z",
+                "protected": true
+              },
+              {
+                "id": "evt-public",
+                "title": "Public demo",
+                "start": "2026-03-10T11:00:00.000Z",
+                "end": "2026-03-10T11:30:00.000Z",
+                "protected": false
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-03-10T00:00:00.000Z",
+          "end": "2026-03-11T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-public",
+                "title": "Public demo",
+                "start": "2026-03-10T11:00:00.000Z",
+                "end": "2026-03-10T11:30:00.000Z",
+                "protected": false
+              }
+            ],
+            "count": 1,
+            "range": {
+              "start": "2026-03-10T00:00:00.000Z",
+              "end": "2026-03-11T00:00:00.000Z"
+            },
+            "calendarId": null
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "list recurring event success",
+      "argv": ["ls", "--start", "2026-04-06T00:00:00Z", "--end", "2026-04-13T00:00:00Z"],
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-recurring::2026-04-07T15%3A00%3A00.000Z",
+                "seriesId": "evt-recurring",
+                "title": "Weekly sync",
+                "start": "2026-04-07T15:00:00.000Z",
+                "end": "2026-04-07T15:30:00.000Z",
+                "timezone": "UTC",
+                "protected": false,
+                "isRecurring": true,
+                "recurrence": {
+                  "freq": "WEEKLY",
+                  "interval": 1,
+                  "count": 4,
+                  "until": null,
+                  "byDay": ["TU"],
+                  "byMonthDay": [],
+                  "weekStart": null,
+                  "exDates": []
+                }
+              }
+            ],
+            "nextCursor": null
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-04-06T00:00:00.000Z",
+          "end": "2026-04-13T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "events": [
+              {
+                "id": "evt-recurring::2026-04-07T15%3A00%3A00.000Z",
+                "seriesId": "evt-recurring",
+                "title": "Weekly sync",
+                "start": "2026-04-07T15:00:00.000Z",
+                "end": "2026-04-07T15:30:00.000Z",
+                "timezone": "UTC",
+                "protected": false,
+                "isRecurring": true,
+                "recurrence": {
+                  "freq": "WEEKLY",
+                  "interval": 1,
+                  "count": 4,
+                  "until": null,
+                  "byDay": ["TU"],
+                  "byMonthDay": [],
+                  "weekStart": null,
+                  "exDates": []
+                }
+              }
+            ],
+            "count": 1,
+            "range": {
+              "start": "2026-04-06T00:00:00.000Z",
+              "end": "2026-04-13T00:00:00.000Z"
+            },
+            "calendarId": null
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "edit event success",
+      "argv": ["edit", "evt-2", "title=Updated", "--clear", "description"],
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "id": "evt-2",
+            "title": "Updated",
+            "description": ""
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "PATCH",
+        "pathname": "/v1/events/evt-2",
+        "body": {
+          "title": "Updated",
+          "description": ""
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "id": "evt-2",
+            "title": "Updated",
+            "description": ""
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "delete series success",
+      "argv": ["rm", "evt-2", "--scope", "series"],
+      "apiResponse": {
+        "status": 200,
+        "body": {
+          "data": {
+            "deleted": true,
+            "eventId": "evt-2",
+            "scope": "series",
+            "occurrenceStart": null
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "DELETE",
+        "pathname": "/v1/events/evt-2",
+        "query": {
+          "scope": "series"
+        }
+      },
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "deleted": true,
+            "eventId": "evt-2",
+            "scope": "series",
+            "occurrenceStart": null
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "invalid list flags error",
+      "argv": ["ls", "--protected", "--unprotected"],
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "Cannot use both --protected and --unprotected"
+          }
+        }
+      }
+    },
+    {
+      "name": "expired API auth error passthrough",
+      "argv": ["ls", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "apiResponse": {
+        "status": 401,
+        "body": {
+          "error": {
+            "code": "AUTH_EXPIRED",
+            "message": "Proton session is expired or unauthorized",
+            "details": {
+              "reloginRequired": true
+            }
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-03-10T00:00:00.000Z",
+          "end": "2026-03-11T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "AUTH_EXPIRED",
+            "message": "Proton session is expired or unauthorized",
+            "details": {
+              "reloginRequired": true
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "local API unavailable error",
+      "argv": ["ls", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "networkError": "connect ECONNREFUSED",
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-03-10T00:00:00.000Z",
+          "end": "2026-03-11T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "API_UNREACHABLE",
+            "message": "Unable to reach API at http://127.0.0.1:8787",
+            "details": {
+              "message": "connect ECONNREFUSED"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "upstream API error passthrough",
+      "argv": ["ls", "--start", "2026-05-01T00:00:00Z", "--end", "2026-05-02T00:00:00Z"],
+      "apiResponse": {
+        "status": 502,
+        "body": {
+          "error": {
+            "code": "UPSTREAM_UNREACHABLE",
+            "message": "Unable to reach Proton backend",
+            "details": {
+              "cause": "network"
+            }
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-05-01T00:00:00.000Z",
+          "end": "2026-05-02T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 1,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "UPSTREAM_UNREACHABLE",
+            "message": "Unable to reach Proton backend",
+            "details": {
+              "cause": "network"
+            }
+          }
+        }
+      }
+    }
+  ],
+  "doctorRefreshRecovered": {
+    "argv": ["doctor", "auth", "--cookie-bundle", "<cookie-bundle>", "--proton-base-url", "https://calendar.proton.me"],
+    "expected": {
+      "exitCode": 0,
+      "stdout": {
+        "data": {
+          "topic": "auth",
+          "status": "refresh_recovered",
+          "reloginRequired": false,
+          "refreshPossible": true,
+          "refreshAttempted": true,
+          "refreshSucceeded": true,
+          "uid": "uid-1",
+          "host": "https://calendar.proton.me",
+          "uidCandidates": ["uid-1"],
+          "protonHosts": ["https://calendar.proton.me", "https://account.proton.me"],
+          "cookieBundlePath": "<cookie-bundle>",
+          "authCookies": {
+            "before": [
+              {
+                "name": "AUTH-uid-1",
+                "domain": "calendar.proton.me",
+                "path": "/api/",
+                "expiresAt": null,
+                "expiresAtIso": null
+              },
+              {
+                "name": "REFRESH-uid-1",
+                "domain": "calendar.proton.me",
+                "path": "/api/auth/refresh",
+                "expiresAt": null,
+                "expiresAtIso": null
+              }
+            ],
+            "after": [
+              {
+                "name": "AUTH-uid-1",
+                "domain": "calendar.proton.me",
+                "path": "/api/",
+                "expiresAt": 4102272000000,
+                "expiresAtIso": "2099-12-30T00:00:00.000Z"
+              },
+              {
+                "name": "REFRESH-uid-1",
+                "domain": "calendar.proton.me",
+                "path": "/api/auth/refresh",
+                "expiresAt": null,
+                "expiresAtIso": null
+              }
+            ]
+          },
+          "suggestions": ["Auth looks recoverable with current refresh cookies."]
+        }
+      },
+      "stderr": ""
+    }
+  }
+}
