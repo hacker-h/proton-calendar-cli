@@ -1,3 +1,15 @@
+# [1.1.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.12...v1.1.0) (2026-05-09)
+
+
+### Bug Fixes
+
+* reject unsafe cookie bundle permissions ([c550dd1](https://github.com/hacker-h/proton-calendar-cli/commit/c550dd16466e6d30724f3e57f539a3added79c3d))
+
+
+### Features
+
+* add logout secret cleanup ([9967d5e](https://github.com/hacker-h/proton-calendar-cli/commit/9967d5ec0ea98e8ab21b062a6c756e97250c791b))
+
 ## [1.0.12](https://github.com/hacker-h/proton-calendar-cli/compare/v1.0.11...v1.0.12) (2026-05-09)
 
 
