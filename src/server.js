@@ -40,6 +40,7 @@ export function createApiServer(config, options = {}) {
       allowedCalendarIds: config.allowedCalendarIds,
       protonClient,
       sessionStore,
+      recurrenceMaxIterations: config.recurrenceMaxIterations,
     });
 
   const server = http.createServer(async (req, res) => {

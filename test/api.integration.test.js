@@ -6,6 +6,7 @@ import path from "node:path";
 import { startApiServer } from "../src/server.js";
 import { ApiError } from "../src/errors.js";
 import { CookieSessionStore } from "../src/session/cookie-session-store.js";
+import { CalendarService } from "../src/service/calendar-service.js";
 
 test("health endpoint responds without auth", async () => {
   const setup = await createFixture();
@@ -244,6 +245,307 @@ test("supports recurrence and expands instances in list responses", async () => 
   }
 });
 
+test("supports monthly ordinal BYDAY recurrence expansion", async () => {
+  const setup = await createFixture();
+  try {
+    const scenarios = [
+      {
+        title: "First Monday",
+        recurrence: { freq: "MONTHLY", count: 4, byDay: ["+1MO"] },
+        expectedByDay: ["+1MO"],
+        expectedStarts: [
+          "2026-01-05T09:00:00.000Z",
+          "2026-02-02T09:00:00.000Z",
+          "2026-03-02T09:00:00.000Z",
+          "2026-04-06T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Second Tuesday",
+        recurrence: { freq: "MONTHLY", count: 4, byDay: ["2TU"] },
+        expectedByDay: ["2TU"],
+        expectedStarts: [
+          "2026-01-13T09:00:00.000Z",
+          "2026-02-10T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-04-14T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Last Friday",
+        recurrence: { freq: "MONTHLY", count: 4, byDay: ["-1FR"] },
+        expectedByDay: ["-1FR"],
+        expectedStarts: [
+          "2026-01-30T09:00:00.000Z",
+          "2026-02-27T09:00:00.000Z",
+          "2026-03-27T09:00:00.000Z",
+          "2026-04-24T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Fifth Monday",
+        recurrence: { freq: "MONTHLY", count: 3, byDay: ["5MO"] },
+        expectedByDay: ["5MO"],
+        expectedStarts: [
+          "2026-03-30T09:00:00.000Z",
+          "2026-06-29T09:00:00.000Z",
+          "2026-08-31T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Friday the 13th",
+        recurrence: { freq: "MONTHLY", count: 2, byDay: ["FR"], byMonthDay: [13] },
+        expectedByDay: ["FR"],
+        expectedStarts: ["2026-02-13T09:00:00.000Z", "2026-03-13T09:00:00.000Z"],
+      },
+      {
+        title: "First Monday on first day",
+        recurrence: { freq: "MONTHLY", count: 1, byDay: ["+1MO"], byMonthDay: [1] },
+        expectedByDay: ["+1MO"],
+        expectedStarts: ["2026-06-01T09:00:00.000Z"],
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const created = await apiRequest(setup, "POST", "/v1/events", {
+        title: scenario.title,
+        start: "2026-01-01T09:00:00.000Z",
+        end: "2026-01-01T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: scenario.recurrence,
+      });
+      assert.equal(created.status, 201);
+      assert.deepEqual(created.body.data.recurrence.byDay, scenario.expectedByDay);
+    }
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-01-01T00:00:00.000Z&end=2026-09-01T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    for (const scenario of scenarios) {
+      const starts = listed.body.data.events
+        .filter((event) => event.title === scenario.title)
+        .map((event) => event.occurrenceStart);
+      assert.deepEqual(starts, scenario.expectedStarts);
+    }
+  } finally {
+    await setup.close();
+  }
+});
+
+test("expands monthly BYDAY from RRULE strings", async () => {
+  const service = new CalendarService({
+    targetCalendarId: "assistant-calendar",
+    defaultCalendarId: "assistant-calendar",
+    allowedCalendarIds: ["assistant-calendar"],
+    sessionStore: {},
+    protonClient: {
+      async listEvents() {
+        return {
+          events: [
+            {
+              id: "evt-rrule-first-monday",
+              calendarId: "assistant-calendar",
+              title: "RRULE first Monday",
+              start: "2026-01-01T09:00:00.000Z",
+              end: "2026-01-01T09:30:00.000Z",
+              timezone: "UTC",
+              rrule: "RRULE:FREQ=MONTHLY;COUNT=3;BYDAY=+1MO",
+            },
+            {
+              id: "evt-rrule-mondays",
+              calendarId: "assistant-calendar",
+              title: "RRULE Mondays",
+              start: "2026-01-01T10:00:00.000Z",
+              end: "2026-01-01T10:30:00.000Z",
+              timezone: "UTC",
+              rrule: "RRULE:FREQ=MONTHLY;COUNT=4;BYDAY=MO",
+            },
+            {
+              id: "evt-rrule-friday-13th",
+              calendarId: "assistant-calendar",
+              title: "RRULE Friday the 13th",
+              start: "2026-01-01T11:00:00.000Z",
+              end: "2026-01-01T11:30:00.000Z",
+              timezone: "UTC",
+              rrule: "RRULE:FREQ=MONTHLY;COUNT=2;BYDAY=FR;BYMONTHDAY=13",
+            },
+          ],
+          nextCursor: null,
+        };
+      },
+    },
+  });
+
+  const listed = await service.listEvents({
+    start: "2026-01-01T00:00:00.000Z",
+    end: "2026-04-01T00:00:00.000Z",
+    limit: 50,
+  });
+
+  assert.deepEqual(
+    listed.events.filter((event) => event.title === "RRULE first Monday").map((event) => event.occurrenceStart),
+    ["2026-01-05T09:00:00.000Z", "2026-02-02T09:00:00.000Z", "2026-03-02T09:00:00.000Z"]
+  );
+  assert.deepEqual(
+    listed.events.filter((event) => event.title === "RRULE Mondays").map((event) => event.occurrenceStart),
+    ["2026-01-05T10:00:00.000Z", "2026-01-12T10:00:00.000Z", "2026-01-19T10:00:00.000Z", "2026-01-26T10:00:00.000Z"]
+  );
+  assert.deepEqual(
+    listed.events.filter((event) => event.title === "RRULE Friday the 13th").map((event) => event.occurrenceStart),
+    ["2026-02-13T11:00:00.000Z", "2026-03-13T11:00:00.000Z"]
+  );
+});
+
+test("exDates do not consume recurrence count budget", async () => {
+  const setup = await createFixture();
+  try {
+    const scenarios = [
+      {
+        title: "Daily count no exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 4,
+          exDates: [],
+        },
+        expectedStarts: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-12T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Daily count some exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 4,
+          exDates: ["2026-03-10T09:00:00.000Z", "2026-03-12T09:00:00.000Z"],
+        },
+        expectedStarts: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-13T09:00:00.000Z",
+          "2026-03-14T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Daily count all-but-one exclusions",
+        recurrence: {
+          freq: "DAILY",
+          count: 2,
+          exDates: [
+            "2026-03-09T09:00:00.000Z",
+            "2026-03-10T09:00:00.000Z",
+            "2026-03-11T09:00:00.000Z",
+          ],
+        },
+        expectedStarts: ["2026-03-12T09:00:00.000Z", "2026-03-13T09:00:00.000Z"],
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const created = await apiRequest(setup, "POST", "/v1/events", {
+        title: scenario.title,
+        start: "2026-03-09T09:00:00.000Z",
+        end: "2026-03-09T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: scenario.recurrence,
+      });
+      assert.equal(created.status, 201);
+    }
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-16T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    for (const scenario of scenarios) {
+      const starts = listed.body.data.events
+        .filter((event) => event.title === scenario.title)
+        .map((event) => event.occurrenceStart);
+      assert.deepEqual(starts, scenario.expectedStarts);
+    }
+  } finally {
+    await setup.close();
+  }
+});
+
+test("recurrence expansion stops when candidate iteration cap is exhausted", async () => {
+  const setup = await createFixture({ recurrenceMaxIterations: 3 });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Excluded daily series",
+      start: "2026-03-09T09:00:00.000Z",
+      end: "2026-03-09T09:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "DAILY",
+        count: 2,
+        exDates: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+          "2026-03-12T09:00:00.000Z",
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-20T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 422);
+    assert.equal(listed.body.error.code, "RECURRENCE_ITERATION_LIMIT");
+    assert.equal(listed.body.error.details.maxIterations, 3);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("near-all-excluded recurrence emits after skipped candidates before cap", async () => {
+  const setup = await createFixture({ recurrenceMaxIterations: 6 });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Mostly excluded daily series",
+      start: "2026-03-09T09:00:00.000Z",
+      end: "2026-03-09T09:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "DAILY",
+        count: 2,
+        exDates: [
+          "2026-03-09T09:00:00.000Z",
+          "2026-03-10T09:00:00.000Z",
+          "2026-03-11T09:00:00.000Z",
+        ],
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-20T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "Mostly excluded daily series")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, ["2026-03-12T09:00:00.000Z", "2026-03-13T09:00:00.000Z"]);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports pagination on expanded recurrence instances", async () => {
   const setup = await createFixture();
   try {
@@ -471,6 +773,26 @@ test("validates recurrence constraints and scope requirements", async () => {
     assert.equal(badRecurrence.status, 400);
     assert.equal(badRecurrence.body.error.code, "INVALID_RECURRENCE");
 
+    const weeklyOrdinalByDay = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad weekly byDay",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "WEEKLY", byDay: ["+1MO"] },
+    });
+    assert.equal(weeklyOrdinalByDay.status, 400);
+    assert.equal(weeklyOrdinalByDay.body.error.code, "INVALID_RECURRENCE");
+
+    const monthlyOrdinalOutOfRange = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad monthly ordinal byDay",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "MONTHLY", byDay: ["+6MO"] },
+    });
+    assert.equal(monthlyOrdinalOutOfRange.status, 400);
+    assert.equal(monthlyOrdinalOutOfRange.body.error.code, "INVALID_RECURRENCE");
+
     const created = await apiRequest(setup, "POST", "/v1/events", {
       title: "Good recurrence",
       start: "2026-03-10T10:00:00.000Z",
@@ -496,6 +818,16 @@ test("validates recurrence constraints and scope requirements", async () => {
     );
     assert.equal(invalidRange.status, 400);
     assert.equal(invalidRange.body.error.code, "INVALID_TIME_RANGE");
+
+    const impossibleMonthlyByDay = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Impossible monthly BYDAY",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      recurrence: { freq: "MONTHLY", count: 1, byDay: ["+1MO"], byMonthDay: [31] },
+    });
+    assert.equal(impossibleMonthlyByDay.status, 400);
+    assert.equal(impossibleMonthlyByDay.body.error.code, "INVALID_RECURRENCE");
   } finally {
     await setup.close();
   }
@@ -737,6 +1069,7 @@ async function createFixture(options = {}) {
       protonBaseUrl: proton.baseUrl,
       protonTimeoutMs: 3000,
       protonMaxRetries: 0,
+      recurrenceMaxIterations: options.recurrenceMaxIterations,
     },
     { port: 0, protonClient: proton.client, sessionStore }
   );
