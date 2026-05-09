@@ -50,6 +50,6 @@
     "url": "https://github.com/hacker-h/proton-calendar-cli/issues"
   },
   "engines": {
-    "node": ">=22"
+    "node": ">=24"
   }
 }

@@ -1,4 +1,4 @@
-image: node:22-bookworm
+image: node:24-bookworm
 
 stages:
   - test
