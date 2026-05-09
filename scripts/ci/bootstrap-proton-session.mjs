@@ -3,6 +3,7 @@
 import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "playwright";
+import { DEFAULT_PROTON_APP_VERSION } from "../../src/constants.js";
 
 const DEFAULT_OUTPUT_FILE = "secrets/proton-cookies.json";
 const DEFAULT_LOGIN_URL = "https://account.proton.me/login";
@@ -388,12 +389,12 @@ async function verifyCalendarApiSession(page, uidCandidates) {
 
   for (const uid of candidates) {
     try {
-      const payload = await page.evaluate(async (candidateUid) => {
+      const payload = await page.evaluate(async ({ candidateUid, appVersion }) => {
         const response = await fetch("/api/calendar/v1", {
           method: "GET",
           headers: {
             Accept: "application/vnd.protonmail.v1+json",
-            "x-pm-appversion": "web-calendar@5.0.101.3",
+            "x-pm-appversion": appVersion,
             "x-pm-locale": "en-US",
             "x-pm-uid": candidateUid,
           },
@@ -412,7 +413,7 @@ async function verifyCalendarApiSession(page, uidCandidates) {
           status: response.status,
           body,
         };
-      }, uid);
+      }, { candidateUid: uid, appVersion: DEFAULT_PROTON_APP_VERSION });
 
       const calendars = Array.isArray(payload?.body?.Calendars) ? payload.body.Calendars : [];
       if (payload?.ok && [1000, 1001].includes(payload?.body?.Code) && calendars.length > 0) {

@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { getCookies } from "@steipete/sweet-cookie";
+import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
 import {
   DEFAULT_PROTON_DOMAINS,
   countAuthCookies,
@@ -709,7 +710,7 @@ async function verifyCalendarApiSession(cookiesByDomain, uidCandidates) {
           headers: {
             Accept: "application/vnd.protonmail.v1+json",
             Cookie: cookieHeader,
-            "x-pm-appversion": "web-calendar@5.0.101.3",
+            "x-pm-appversion": DEFAULT_PROTON_APP_VERSION,
             "x-pm-locale": "en-US",
             "x-pm-uid": uid,
           },
