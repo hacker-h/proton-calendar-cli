@@ -79,6 +79,95 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
   );
 });
 
+test("authStatus refreshes cached UID after session generation changes", async () => {
+  let generation = 1;
+  const requestedUids = [];
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getGeneration() {
+        return generation;
+      },
+      async getUIDCandidates() {
+        return generation === 1 ? ["uid-old"] : ["uid-new"];
+      },
+      async getCookieHeader() {
+        return "pm-session=valid; pm-auth=valid";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+    },
+    fetchImpl: async (url, init) => {
+      requestedUids.push(init.headers["x-pm-uid"]);
+      return jsonResponse(200, { Code: 1000, User: { ID: init.headers["x-pm-uid"] } });
+    },
+    maxRetries: 0,
+  });
+
+  assert.equal((await client.authStatus()).uid, "uid-old");
+  generation = 2;
+  assert.equal((await client.authStatus()).uid, "uid-new");
+  assert.deepEqual(requestedUids, ["uid-old", "uid-old", "uid-new", "uid-new"]);
+});
+
+test("listEvents evicts cached context after session generation changes", async () => {
+  let generation = 1;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getGeneration() {
+        return generation;
+      },
+      async getUIDCandidates() {
+        return ["uid-123"];
+      },
+      async getCookieHeader() {
+        return "pm-session=valid; pm-auth=valid";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+    },
+    fetchImpl: async (url, init) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: init.headers["x-pm-uid"] } });
+      }
+      if (parsed.pathname === "/api/calendar/v1/cal-1/events") {
+        return jsonResponse(200, { Code: 1000, Events: [], Total: 0 });
+      }
+      throw new Error(`Unexpected request: ${parsed.pathname}`);
+    },
+    maxRetries: 0,
+  });
+  client.cachedUID = "uid-123";
+  client.cachedUIDGeneration = 1;
+  client.cachedContext = {
+    uid: "uid-123",
+    calendarId: "cal-1",
+    sessionGeneration: 1,
+  };
+
+  await client.listEvents({
+    calendarId: "cal-1",
+    start: "2026-03-10T00:00:00.000Z",
+    end: "2026-03-11T00:00:00.000Z",
+    limit: 10,
+  });
+
+  generation = 2;
+  await assert.rejects(
+    () => client.listEvents({
+      calendarId: "cal-1",
+      start: "2026-03-10T00:00:00.000Z",
+      end: "2026-03-11T00:00:00.000Z",
+      limit: 10,
+    }),
+    (error) => error?.code === "SESSION_BLOB_MISSING"
+  );
+});
+
 test("rate limited Proton requests respect Retry-After before retrying", async () => {
   const delays = [];
   let calendarAttempts = 0;
