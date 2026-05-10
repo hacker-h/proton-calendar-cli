@@ -760,7 +760,6 @@ export class ProtonCalendarClient {
     }
 
     const suffix = details ? ` ${JSON.stringify(details)}` : "";
-    // eslint-disable-next-line no-console
     console.log(`[proton-auth] ${message}${suffix}`);
   }
 
@@ -1049,7 +1048,7 @@ export function formatVcalWithTzid(date, timezone) {
 export function buildSharedParts({
   uid,
   sequence,
-  organizerEmail,
+  organizerEmail: _organizerEmail,
   startDate,
   endDate,
   allDay = false,
