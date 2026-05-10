@@ -160,6 +160,7 @@ Automation callers should treat `pc` as a JSON command surface with private-API 
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
 - Run `pc doctor auth --fail-on-relogin-required` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
 - Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
+- Continue API pagination with `nextCursor`; if a list command returns `EVENT_LIST_PAGE_LIMIT` or `UPSTREAM_EVENT_PAGE_LIMIT`, narrow the date range or calendar scope instead of treating the partial window as complete.
 - Use `X-Idempotency-Key` for HTTP API mutation retries when available; the CLI does not expose an idempotency flag yet, so retry CLI mutations only after checking whether the event already changed.
 - Back off on auth challenges, rate limits, `Retry-After`, captcha, or human-verification states. Do not loop through repeated browser logins.
 - Treat Proton private API shape drift as expected operational failure. Alert, preserve sanitized logs, and require human triage instead of silently continuing.
