@@ -1,3 +1,12 @@
+## [1.2.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.1...v1.2.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* harden relogin lock freshness ([a1b1764](https://github.com/hacker-h/proton-calendar-cli/commit/a1b1764b57889761dcbdcc98a11ab7a0f034d370))
+* lock atomic cookie bundle writes ([186f609](https://github.com/hacker-h/proton-calendar-cli/commit/186f609e23d7602c667500fd5893fc5cab996a86))
+* restore bootstrap profile setup ([23a9b47](https://github.com/hacker-h/proton-calendar-cli/commit/23a9b47d8439496a5bce5be9a509a706c2f07ba6))
+
 ## [1.2.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.0...v1.2.1) (2026-05-09)
 
 
