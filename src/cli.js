@@ -1271,15 +1271,13 @@ async function requestProtonJson(fetchImpl, input) {
   if (!response.ok) {
     throw new CliError("LOGIN_FAILED", "Proton request failed", {
       status: response.status,
-      payload,
+      ...sanitizeUpstreamPayload(payload),
     });
   }
 
   if (payload && typeof payload === "object" && typeof payload.Code === "number") {
     if (![1000, 1001].includes(payload.Code)) {
-      throw new CliError("LOGIN_FAILED", payload.Error || "Unexpected Proton response", {
-        payload,
-      });
+      throw new CliError("LOGIN_FAILED", "Unexpected Proton response", sanitizeUpstreamPayload(payload));
     }
   }
 
@@ -2202,6 +2200,14 @@ function parseMaybeJson(text) {
   }
 }
 
+function sanitizeUpstreamPayload(payload) {
+  const details = {};
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    details.code = payload.Code;
+  }
+  return details;
+}
+
 function parseJsonObject(raw, errorMessage) {
   let parsed;
   try {
@@ -2271,7 +2277,7 @@ function toCliErrorPayload(error) {
       error: {
         code: error.code,
         message: error.message,
-        details: error.details,
+        details: sanitizeErrorDetails(error.details),
       },
     };
   }
@@ -2280,6 +2286,22 @@ function toCliErrorPayload(error) {
       code: "INTERNAL_ERROR",
       message: error?.message || "Internal error",
     },
+  };
+}
+
+function sanitizeErrorDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return details;
+  }
+
+  if (!Object.hasOwn(details, "payload")) {
+    return details;
+  }
+
+  const { payload, ...rest } = details;
+  return {
+    ...rest,
+    ...sanitizeUpstreamPayload(payload),
   };
 }
 
