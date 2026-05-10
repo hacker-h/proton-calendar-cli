@@ -73,6 +73,11 @@ export function createApiServer(config, options = {}) {
         return;
       }
 
+      if (method === "GET" && url.pathname === "/v1/calendars") {
+        send(200, { data: await service.listCalendars() });
+        return;
+      }
+
       const route = parseEventRoute(url.pathname);
 
       if (route?.kind === "collection" && method === "GET") {

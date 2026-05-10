@@ -73,6 +73,27 @@ test("reports auth status and calendar scope configuration", async () => {
   }
 });
 
+test("lists configured calendars with default and allowlist metadata", async () => {
+  const setup = await createFixture({
+    calendarIds: ["assistant-calendar", "team-calendar", "private-calendar"],
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar", "team-calendar"],
+    defaultCalendarId: "team-calendar",
+  });
+  try {
+    const response = await apiRequest(setup, "GET", "/v1/calendars");
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data.calendars.map((calendar) => calendar.id), ["assistant-calendar", "team-calendar"]);
+    assert.deepEqual(response.body.data.allowedCalendarIds, ["assistant-calendar", "team-calendar"]);
+    assert.equal(response.body.data.defaultCalendarId, "team-calendar");
+    assert.equal(response.body.data.targetCalendarId, null);
+    assert.equal(response.body.data.calendars[0].default, false);
+    assert.equal(response.body.data.calendars[1].default, true);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reports unauthenticated auth status for ApiError AUTH_EXPIRED", async () => {
   const setup = await createFixture({ initialSessionCookie: "expired-cookie" });
   try {
@@ -1333,6 +1354,16 @@ function createMockProtonClient(options) {
       }
       await assertAuthorized();
       return { ok: true, account: "assistant" };
+    },
+
+    async listCalendars() {
+      await assertAuthorized();
+      return calendarIds.map((calendarId, index) => ({
+        id: calendarId,
+        name: index === 0 ? "Assistant" : `Calendar ${index + 1}`,
+        color: index === 0 ? "#3366ff" : null,
+        permissions: 127,
+      }));
     },
 
     async listEvents({ calendarId, limit, cursor }) {

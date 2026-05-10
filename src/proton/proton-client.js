@@ -55,6 +55,13 @@ export class ProtonCalendarClient {
     };
   }
 
+  async listCalendars() {
+    const uid = await this.#getUID();
+    const payload = await this.#requestJSON("GET", "/api/calendar/v1", { uid });
+    const calendars = Array.isArray(payload?.Calendars) ? payload.Calendars : [];
+    return calendars.map(normalizeCalendar).filter((calendar) => calendar.id);
+  }
+
   async listEvents({ calendarId, start, end, limit, cursor }) {
     const uid = await this.#getUID();
     const startUnix = toUnix(start);
@@ -872,6 +879,17 @@ export class ProtonCalendarClient {
     this.cachedUID = "";
     this.cachedContext = null;
   }
+}
+
+function normalizeCalendar(calendar) {
+  const id = String(calendar?.ID || calendar?.CalendarID || "").trim();
+  const name = String(calendar?.Name || calendar?.DisplayName || calendar?.Title || id).trim();
+  return {
+    id,
+    name: name || id,
+    color: calendar?.Color || null,
+    permissions: calendar?.Permissions ?? null,
+  };
 }
 
 function findPersistedSession(persistedSessions, uid) {

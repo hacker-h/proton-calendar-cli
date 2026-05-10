@@ -77,6 +77,46 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
   );
 });
 
+test("listCalendars normalizes Proton calendar payload", async () => {
+  const requests = [];
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getUIDCandidates() {
+        return ["uid-123"];
+      },
+      async getCookieHeader() {
+        return "pm-session=valid; pm-auth=valid";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: String(url), init });
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(200, {
+        Code: 1000,
+        Calendars: [
+          { ID: "cal-1", Name: "Work", Color: "#3366ff", Permissions: 127 },
+          { ID: "cal-2", DisplayName: "Personal" },
+        ],
+      });
+    },
+    maxRetries: 0,
+  });
+
+  const calendars = await client.listCalendars();
+  assert.deepEqual(calendars, [
+    { id: "cal-1", name: "Work", color: "#3366ff", permissions: 127 },
+    { id: "cal-2", name: "Personal", color: null, permissions: null },
+  ]);
+  assert.equal(new URL(requests.at(-1).url).pathname, "/api/calendar/v1");
+});
+
 test("authStatus refreshes auth cookies and retries request", async () => {
   const calls = [];
   let usersRequestCount = 0;

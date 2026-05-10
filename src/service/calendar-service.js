@@ -60,6 +60,31 @@ export class CalendarService {
     }
   }
 
+  async listCalendars() {
+    const calendars = (await this.protonClient.listCalendars())
+      .map((calendar) => ({
+        id: String(calendar.id || ""),
+        name: String(calendar.name || calendar.id || ""),
+        color: calendar.color || null,
+        permissions: calendar.permissions ?? null,
+      }))
+      .filter((calendar) => calendar.id)
+      .filter((calendar) => this.allowedCalendarIds.size === 0 || this.allowedCalendarIds.has(calendar.id))
+      .map((calendar) => ({
+        ...calendar,
+        default: calendar.id === this.defaultCalendarId,
+        target: calendar.id === this.targetCalendarId,
+        allowed: true,
+      }));
+
+    return {
+      calendars,
+      targetCalendarId: this.targetCalendarId,
+      defaultCalendarId: this.defaultCalendarId,
+      allowedCalendarIds: [...this.allowedCalendarIds].sort(),
+    };
+  }
+
   async listEvents(input, options = {}) {
     const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
     const range = validateRange(input.start, input.end);
