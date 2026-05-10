@@ -1,3 +1,10 @@
+## [1.4.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.0...v1.4.1) (2026-05-10)
+
+
+### Bug Fixes
+
+* generate live canary bearer tokens ([dfc7e2a](https://github.com/hacker-h/proton-calendar-cli/commit/dfc7e2acfb6cc6e129c048e7fdbbdd0e0fcbccdf))
+
 # [1.4.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.5...v1.4.0) (2026-05-10)
 
 
