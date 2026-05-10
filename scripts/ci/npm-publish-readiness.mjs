@@ -35,7 +35,9 @@ async function assertPackageMetadata() {
   assertMatches(packageJson.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/, "package version must be semver-like");
   assertEqual(packageJson.license, "MIT", "package license must be MIT");
   assertEqual(packageJson.type, "module", "package must remain ESM");
-  assertEqual(packageJson.private, undefined, "package must not be marked private when checking publish readiness");
+  if (packageJson.private === true) {
+    throw new Error("package must not be marked private when checking publish readiness");
+  }
   assertNonEmptyString(packageJson.description, "package description is required for npm metadata");
   assertNonEmptyString(packageJson.homepage, "package homepage is required for npm metadata");
   assertNonEmptyString(packageJson.repository?.url, "package repository.url is required for npm metadata");
