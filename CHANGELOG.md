@@ -1,3 +1,12 @@
+# [1.3.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.2...v1.3.0) (2026-05-10)
+
+
+### Features
+
+* add calendar discovery api ([9f0dc67](https://github.com/hacker-h/proton-calendar-cli/commit/9f0dc679807620b9312eeb4fc725ed231280a871))
+* add calendar discovery cli ([db3ccd1](https://github.com/hacker-h/proton-calendar-cli/commit/db3ccd164a413cd3b5f7b678390b4d2487781421))
+* allow default calendar updates ([4346c4b](https://github.com/hacker-h/proton-calendar-cli/commit/4346c4b64e82cd16e3e5f00479d6928a1620a804))
+
 ## [1.2.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.1...v1.2.2) (2026-05-10)
 
 
