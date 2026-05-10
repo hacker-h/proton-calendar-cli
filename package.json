@@ -9,8 +9,7 @@
     "scripts/bootstrap-proton-cookies.mjs",
     "README.md",
     "CHANGELOG.md",
-    "LICENSE",
-    "AGENTS.md"
+    "LICENSE"
   ],
   "bin": {
     "pc": "src/cli.js"
@@ -21,10 +20,11 @@
     "check:browser": "pnpm exec playwright install --with-deps chromium && node scripts/ci/browser-smoke.mjs",
     "check:toolchain": "node scripts/ci/dependency-health.mjs",
     "ci:live": "node scripts/ci/run-live-canary.mjs",
-    "ci:local": "pnpm run check:toolchain && pnpm test:unit && pnpm run smoke:package",
+    "ci:local": "pnpm run check:toolchain && pnpm test:unit && pnpm run smoke:package && pnpm run readiness:npm-publish",
     "pc": "node src/cli.js",
     "release": "semantic-release",
     "release:dry-run": "semantic-release --dry-run --debug",
+    "readiness:npm-publish": "node scripts/ci/npm-publish-readiness.mjs",
     "smoke:package": "node scripts/ci/package-smoke.mjs",
     "start": "node src/index.js",
     "sync:github-secrets": "node scripts/ci/sync-github-secrets.mjs",
