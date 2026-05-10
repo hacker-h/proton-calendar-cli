@@ -122,6 +122,38 @@ test("invalidate reloads updated cookies from disk", async () => {
   assert.equal(header.includes("AUTH-uid-1=new-value"), true);
 });
 
+test("session generation advances after reloads and cookie writes", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "cookie-store-generation-test-"));
+  const bundlePath = path.join(tmpDir, "cookies.json");
+  await writeBundle(bundlePath, {
+    cookies: [
+      {
+        name: "AUTH-uid-1",
+        value: "old-value",
+        domain: "calendar.proton.me",
+        path: "/api/",
+        secure: true,
+      },
+    ],
+  });
+
+  const store = new CookieSessionStore({ cookieBundlePath: bundlePath });
+  const initialGeneration = await store.getGeneration();
+
+  await store.applySetCookieHeaders(
+    "https://calendar.proton.me/api/auth/refresh",
+    ["AUTH-uid-1=new-value; Path=/api/; Domain=calendar.proton.me; Expires=Wed, 30 Dec 2099 00:00:00 GMT; Secure; HttpOnly"]
+  );
+  const writeGeneration = await store.getGeneration();
+
+  await store.invalidate();
+  const reloadGeneration = await store.getGeneration();
+
+  assert.equal(initialGeneration, 1);
+  assert.equal(writeGeneration, 2);
+  assert.equal(reloadGeneration, 3);
+});
+
 test("unsafe cookie bundle permissions are rejected", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX permission bits are not reliable on Windows");

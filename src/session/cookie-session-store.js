@@ -15,6 +15,7 @@ export class CookieSessionStore {
     this.cookies = [];
     this.bundle = {};
     this.lastLoadedAt = null;
+    this.generation = 0;
   }
 
   getBundlePath() {
@@ -47,6 +48,11 @@ export class CookieSessionStore {
   async getBundle() {
     await this.#reloadIfNeeded();
     return this.bundle;
+  }
+
+  async getGeneration() {
+    await this.#reloadIfNeeded();
+    return this.generation;
   }
 
   async getUIDCandidates() {
@@ -174,6 +180,7 @@ export class CookieSessionStore {
         const fileStat = await stat(this.cookieBundlePath);
         this.cachedMtimeMs = fileStat.mtimeMs;
         this.lastLoadedAt = new Date().toISOString();
+        this.generation += 1;
 
         return changes;
       },
@@ -204,6 +211,7 @@ export class CookieSessionStore {
     this.cookies = loaded.cookies;
     this.bundle = loaded.bundle;
     this.lastLoadedAt = new Date().toISOString();
+    this.generation += 1;
   }
 
   async #statBundle() {
