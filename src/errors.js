@@ -12,12 +12,13 @@ export function isApiError(error) {
   return error instanceof ApiError;
 }
 
-export function toErrorPayload(error) {
+export function toErrorPayload(error, options = {}) {
   if (isApiError(error)) {
     return {
       error: {
         code: error.code,
         message: error.message,
+        requestId: options.requestId,
         details: sanitizeErrorDetails(error.details),
       },
     };
@@ -27,6 +28,7 @@ export function toErrorPayload(error) {
     error: {
       code: "INTERNAL_ERROR",
       message: "Internal server error",
+      requestId: options.requestId,
     },
   };
 }

@@ -151,10 +151,10 @@ export function createApiServer(config, options = {}) {
       throw new ApiError(404, "NOT_FOUND", "Route not found");
     } catch (error) {
       if (isApiError(error)) {
-        send(error.status, toErrorPayload(error));
+        send(error.status, toErrorPayload(error, { requestId }));
         return;
       }
-      send(500, toErrorPayload(error));
+      send(500, toErrorPayload(error, { requestId }));
     }
   });
 
