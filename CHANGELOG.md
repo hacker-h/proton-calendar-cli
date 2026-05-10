@@ -1,3 +1,10 @@
+## [1.3.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.4...v1.3.5) (2026-05-10)
+
+
+### Bug Fixes
+
+* handle monthly recurrence short months ([9dd52c4](https://github.com/hacker-h/proton-calendar-cli/commit/9dd52c455face5dadbd455655a57248392acb776))
+
 ## [1.3.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.3...v1.3.4) (2026-05-10)
 
 
