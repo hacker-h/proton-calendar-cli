@@ -252,11 +252,20 @@ async function waitForApi(apiBaseUrl, timeoutMs) {
   throw lastError || new Error("API did not become ready in time");
 }
 
+function sanitizeDriftSnapshot(snapshot) {
+  return {
+    ...snapshot,
+    surfaces: (snapshot.surfaces || []).map(({ rawPayload: _raw, ...rest }) => rest),
+  };
+}
+
 async function runLiveDriftSnapshot({ apiBaseUrl, env }) {
   const baselinePath = path.resolve(env.CI_LIVE_DRIFT_BASELINE_PATH || DEFAULT_DRIFT_BASELINE_PATH);
   const reportPath = path.resolve(env.CI_LIVE_DRIFT_REPORT_PATH || DEFAULT_DRIFT_REPORT_PATH);
   const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
-  const current = await captureLiveDriftSnapshot({ apiBaseUrl, env });
+  const rawCurrent = await captureLiveDriftSnapshot({ apiBaseUrl, env });
+  // Strip rawPayload before building the report; it must never appear in sanitized output.
+  const current = sanitizeDriftSnapshot(rawCurrent);
   const report = buildLiveDriftReport({ baseline, current, env });
 
   assertSafeDiagnostics(report);
@@ -270,18 +279,61 @@ async function runLiveDriftSnapshot({ apiBaseUrl, env }) {
 
 async function captureLiveDriftSnapshot({ apiBaseUrl, env }) {
   const token = String(env.PC_API_TOKEN || env.API_BEARER_TOKEN || "").trim();
+  const calendarId = String(env.PROTON_TEST_CALENDAR_ID || env.TARGET_CALENDAR_ID || env.DEFAULT_CALENDAR_ID || "").trim() || null;
   const start = new Date().toISOString();
-  const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
-  const requests = [
+  const end = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
+
+  const surfaces = [];
+
+  // Required read-only surfaces
+  for (const request of [
     { id: "auth.status", method: "GET", endpoint: "/v1/auth/status" },
     { id: "calendars.list", method: "GET", endpoint: "/v1/calendars" },
     { id: "events.list", method: "GET", endpoint: `/v1/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=1` },
-  ];
+  ]) {
+    surfaces.push(await captureDriftSurface(apiBaseUrl, token, request));
+  }
+
+  // Optional scoped list (when calendar id available)
+  if (calendarId) {
+    surfaces.push(await captureDriftSurface(apiBaseUrl, token, {
+      id: "calendar.events.list",
+      method: "GET",
+      endpoint: `/v1/calendars/${encodeURIComponent(calendarId)}/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=1`,
+    }));
+  }
+
+  // Optional single-event GET from the generic list result (no mutations required)
+  const genericListSurface = surfaces.find((s) => s.id === "events.list");
+  const firstEventId = extractFirstEventId(genericListSurface?.rawPayload);
+  if (firstEventId) {
+    surfaces.push(await captureDriftSurface(apiBaseUrl, token, {
+      id: "events.get",
+      method: "GET",
+      endpoint: `/v1/events/${encodeURIComponent(firstEventId)}`,
+    }));
+    if (calendarId) {
+      surfaces.push(await captureDriftSurface(apiBaseUrl, token, {
+        id: "calendar.events.get",
+        method: "GET",
+        endpoint: `/v1/calendars/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(firstEventId)}`,
+      }));
+    }
+  }
 
   return {
     generatedAt: new Date().toISOString(),
-    surfaces: await Promise.all(requests.map((request) => captureDriftSurface(apiBaseUrl, token, request))),
+    surfaces,
   };
+}
+
+function extractFirstEventId(payload) {
+  if (!payload || typeof payload !== "object") {
+    return null;
+  }
+  const events = Array.isArray(payload?.data?.events) ? payload.data.events : [];
+  const first = events[0];
+  return first && typeof first.id === "string" && first.id ? first.id : null;
 }
 
 async function captureDriftSurface(apiBaseUrl, token, request) {
@@ -299,6 +351,7 @@ async function captureDriftSurface(apiBaseUrl, token, request) {
     endpoint: request.endpoint.replace(/\?.*$/, ""),
     status: response.status,
     shape: buildDriftShape(payload),
+    rawPayload: payload,
   };
 }
 
@@ -324,6 +377,19 @@ function compareShape(expected, actual, context) {
     }
   }
   if (expected.type === "array") {
+    // When expected items type is "unknown" we do not validate item shape (baseline was captured
+    // from an empty array). When actual items type is "unknown" the live array was empty so there
+    // is nothing to compare; report as informational, not breaking.
+    if (expected.items?.type === "unknown") {
+      if (actual.items?.type !== "unknown") {
+        context.differences.push(buildDriftDifference(context.surface, context.endpoint, "added_field", "additive", `${context.path}[] item shape now available (baseline captured from empty array)`));
+      }
+      return;
+    }
+    if (actual.items?.type === "unknown") {
+      context.differences.push(buildDriftDifference(context.surface, context.endpoint, "empty_array", "additive", `${context.path}[] is empty; item shape comparison skipped`));
+      return;
+    }
     compareShape(expected.items, actual.items, { ...context, path: `${context.path}[]` });
   }
 }
