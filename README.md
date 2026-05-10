@@ -231,6 +231,8 @@ Pull-request CI runs the required no-quota local gate: frozen pnpm install, mock
 
 The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests do not require these secrets or the live canary.
 
+Before live tests run, the canary also compares sanitized response shapes from the local API bridge against `test/fixtures/live-drift-baseline.json` and uploads `reports/live-drift.json`. Missing surfaces or required fields fail with `proton_api_drift`; additive fields are reported for review but do not fail the canary. Drift reports must contain only schema metadata and next-action guidance, never cookies, bearer tokens, event contents, or raw Proton payloads.
+
 ## Releases
 
 Releases are automated from the GitHub `main` branch with semantic-release.
