@@ -50,6 +50,9 @@ jobs:
       - name: Check toolchain metadata
         run: pnpm run check:toolchain
 
+      - name: Run static checks
+        run: pnpm run check:static
+
       - name: Run unit tests with JUnit report
         run: pnpm run test:unit:junit
 

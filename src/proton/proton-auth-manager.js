@@ -167,7 +167,6 @@ export class ProtonAuthManager {
     }
 
     const suffix = details ? ` ${JSON.stringify(details)}` : "";
-    // eslint-disable-next-line no-console
     console.log(`[proton-auth] ${message}${suffix}`);
   }
 }

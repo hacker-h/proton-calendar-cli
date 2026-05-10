@@ -18,9 +18,11 @@
     "bootstrap:cookies": "node scripts/bootstrap-proton-cookies.mjs",
     "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
     "check:browser": "pnpm exec playwright install --with-deps chromium && node scripts/ci/browser-smoke.mjs",
+    "check:static": "pnpm run lint && pnpm run typecheck",
     "check:toolchain": "node scripts/ci/dependency-health.mjs",
     "ci:live": "node scripts/ci/run-live-canary.mjs",
-    "ci:local": "pnpm run check:toolchain && pnpm test:unit && pnpm run smoke:package && pnpm run readiness:npm-publish",
+    "ci:local": "pnpm run check:toolchain && pnpm run check:static && pnpm test:unit && pnpm run smoke:package && pnpm run readiness:npm-publish",
+    "lint": "eslint .",
     "pc": "node src/cli.js",
     "release": "semantic-release",
     "release:dry-run": "semantic-release --dry-run --debug",
@@ -29,6 +31,7 @@
     "start": "node src/index.js",
     "sync:github-secrets": "node scripts/ci/sync-github-secrets.mjs",
     "test": "node --test \"test/*.test.js\"",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
     "test:unit": "node --test \"test/*.test.js\"",
     "test:live": "node --test \"test/live/**/*.test.js\"",
     "test:live:api": "node --test \"test/live/api.live.test.js\"",
@@ -36,13 +39,18 @@
     "test:unit:junit": "mkdir -p reports && node --test --test-reporter=spec --test-reporter-destination=stdout --test-reporter=junit --test-reporter-destination=reports/junit.xml \"test/*.test.js\""
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@semantic-release/changelog": "^6.0.3",
     "@semantic-release/commit-analyzer": "^13.0.1",
     "@semantic-release/git": "^10.0.1",
     "@semantic-release/github": "^12.0.6",
     "@semantic-release/release-notes-generator": "^14.1.0",
+    "@types/node": "^24.12.3",
+    "eslint": "^10.3.0",
+    "globals": "^17.6.0",
     "playwright": "^1.54.2",
-    "semantic-release": "^25.0.3"
+    "semantic-release": "^25.0.3",
+    "typescript": "^6.0.3"
   },
   "dependencies": {
     "@js-temporal/polyfill": "^0.5.1",

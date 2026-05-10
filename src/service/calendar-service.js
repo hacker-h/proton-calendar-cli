@@ -474,7 +474,7 @@ function normalizeEvent(event) {
     throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream event payload is invalid");
   }
 
-  let recurrence = null;
+  let recurrence;
   try {
     recurrence = normalizeIncomingRecurrence(event.recurrence ?? event.rrule ?? null);
   } catch {

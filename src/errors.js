@@ -1,4 +1,15 @@
+// @ts-check
+
+/** @typedef {import("./contracts.js").ApiErrorPayload} ApiErrorPayload */
+/** @typedef {import("./contracts.js").JsonValue} JsonValue */
+
 export class ApiError extends Error {
+  /**
+   * @param {number} status
+   * @param {string} code
+   * @param {string} message
+   * @param {JsonValue | undefined} [details]
+   */
   constructor(status, code, message, details = undefined) {
     super(message);
     this.name = "ApiError";
@@ -8,10 +19,19 @@ export class ApiError extends Error {
   }
 }
 
+/**
+ * @param {unknown} error
+ * @returns {error is ApiError}
+ */
 export function isApiError(error) {
   return error instanceof ApiError;
 }
 
+/**
+ * @param {unknown} error
+ * @param {{ requestId?: string }} [options]
+ * @returns {ApiErrorPayload}
+ */
 export function toErrorPayload(error, options = {}) {
   if (isApiError(error)) {
     return {
@@ -33,6 +53,10 @@ export function toErrorPayload(error, options = {}) {
   };
 }
 
+/**
+ * @param {JsonValue | undefined} details
+ * @returns {JsonValue | undefined}
+ */
 function sanitizeErrorDetails(details) {
   if (!details || typeof details !== "object" || Array.isArray(details)) {
     return details;
@@ -42,16 +66,21 @@ function sanitizeErrorDetails(details) {
     return details;
   }
 
-  const { payload, ...rest } = details;
+  const { payload, ...rest } = /** @type {{ payload?: unknown, [key: string]: unknown }} */ (details);
   return {
     ...rest,
     ...sanitizeUpstreamPayload(payload),
   };
 }
 
+/**
+ * @param {unknown} payload
+ * @returns {{ code?: number }}
+ */
 function sanitizeUpstreamPayload(payload) {
-  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
-    return { code: payload.Code };
+  const candidate = /** @type {{ Code?: unknown } | null} */ (payload && typeof payload === "object" ? payload : null);
+  if (typeof candidate?.Code === "number") {
+    return { code: candidate.Code };
   }
   return {};
 }

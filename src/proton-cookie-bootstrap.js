@@ -60,7 +60,6 @@ export async function fetchDevtoolsTargets(devtoolsPort) {
 
 export async function findAvailablePort(start = 9222, end = 9322) {
   for (let port = start; port <= end; port += 1) {
-    // eslint-disable-next-line no-await-in-loop
     if (await isPortAvailable(port)) {
       return port;
     }

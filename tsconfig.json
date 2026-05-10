@@ -1,0 +1,15 @@
+{
+  "compilerOptions": {
+    "allowJs": true,
+    "checkJs": true,
+    "lib": ["esnext"],
+    "module": "nodenext",
+    "noEmit": true,
+    "skipLibCheck": true,
+    "strict": true,
+    "target": "esnext",
+    "types": ["node"]
+  },
+  "include": ["src/contracts.js", "src/contract-checks.js", "src/errors.js"],
+  "exclude": [".claude", ".playwright", ".pnpm-store", ".sisyphus", ".tmp", "coverage", "node_modules", "reports", "secrets"]
+}
