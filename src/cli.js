@@ -1271,15 +1271,13 @@ async function requestProtonJson(fetchImpl, input) {
   if (!response.ok) {
     throw new CliError("LOGIN_FAILED", "Proton request failed", {
       status: response.status,
-      payload,
+      ...sanitizeUpstreamPayload(payload),
     });
   }
 
   if (payload && typeof payload === "object" && typeof payload.Code === "number") {
     if (![1000, 1001].includes(payload.Code)) {
-      throw new CliError("LOGIN_FAILED", payload.Error || "Unexpected Proton response", {
-        payload,
-      });
+      throw new CliError("LOGIN_FAILED", "Unexpected Proton response", sanitizeUpstreamPayload(payload));
     }
   }
 
@@ -2177,10 +2175,11 @@ async function requestJson(fetchImpl, request) {
   const payload = parseMaybeJson(text);
 
   if (!response.ok) {
+    const requestId = response.headers.get("x-request-id") || payload?.error?.requestId || null;
     throw new CliError(
       payload?.error?.code || "API_ERROR",
       payload?.error?.message || `API request failed (${response.status})`,
-      payload?.error?.details
+      addRequestIdToDetails(payload?.error?.details, requestId)
     );
   }
 
@@ -2200,6 +2199,27 @@ function parseMaybeJson(text) {
       },
     };
   }
+}
+
+function sanitizeUpstreamPayload(payload) {
+  const details = {};
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    details.code = payload.Code;
+  }
+  return details;
+}
+
+function addRequestIdToDetails(details, requestId) {
+  if (!requestId) {
+    return details;
+  }
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return { requestId };
+  }
+  return {
+    ...details,
+    requestId,
+  };
 }
 
 function parseJsonObject(raw, errorMessage) {
@@ -2271,7 +2291,7 @@ function toCliErrorPayload(error) {
       error: {
         code: error.code,
         message: error.message,
-        details: error.details,
+        details: sanitizeErrorDetails(error.details),
       },
     };
   }
@@ -2280,6 +2300,22 @@ function toCliErrorPayload(error) {
       code: "INTERNAL_ERROR",
       message: error?.message || "Internal error",
     },
+  };
+}
+
+function sanitizeErrorDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return details;
+  }
+
+  if (!Object.hasOwn(details, "payload")) {
+    return details;
+  }
+
+  const { payload, ...rest } = details;
+  return {
+    ...rest,
+    ...sanitizeUpstreamPayload(payload),
   };
 }
 

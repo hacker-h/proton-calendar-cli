@@ -826,15 +826,13 @@ export class ProtonCalendarClient {
         if (!response.ok) {
           throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
             status: response.status,
-            payload,
+            ...sanitizeUpstreamPayload(payload),
           });
         }
 
         if (payload && typeof payload === "object" && typeof payload.Code === "number") {
           if (![1000, 1001].includes(payload.Code)) {
-            throw new ApiError(502, "UPSTREAM_ERROR", payload.Error || "Unexpected upstream response", {
-              payload,
-            });
+            throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected upstream response", sanitizeUpstreamPayload(payload));
           }
         }
 
@@ -846,7 +844,7 @@ export class ProtonCalendarClient {
 
         if (isFinalAttempt) {
           throw new ApiError(502, "UPSTREAM_UNREACHABLE", "Unable to reach Proton backend", {
-            message: error?.message,
+            cause: "network",
           });
         }
 
@@ -1497,23 +1495,22 @@ function fromBase64(value) {
 
 function assertSyncEventResponse(payload) {
   if (payload?.Code !== 1001 || !Array.isArray(payload?.Responses) || payload.Responses.length === 0) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected sync response payload", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected sync response payload", sanitizeUpstreamPayload(payload));
   }
 
   const op = payload.Responses[0]?.Response;
   if (!op) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing sync operation response", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Missing sync operation response", sanitizeUpstreamPayload(payload));
   }
 
   if (op.Code !== 1000) {
-    throw new ApiError(502, "UPSTREAM_ERROR", op.Error || "Sync operation failed", {
+    throw new ApiError(502, "UPSTREAM_ERROR", "Sync operation failed", {
       code: op.Code,
-      details: op.Details,
     });
   }
 
   if (!op.Event) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing event in sync response", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Missing event in sync response", sanitizeUpstreamPayload(payload));
   }
 
   return op.Event;
@@ -1521,7 +1518,7 @@ function assertSyncEventResponse(payload) {
 
 function assertSyncDeleteResponse(payload) {
   if (![1000, 1001].includes(payload?.Code)) {
-    throw new ApiError(502, "UPSTREAM_ERROR", payload?.Error || "Delete operation failed", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", sanitizeUpstreamPayload(payload));
   }
 
   if (!Array.isArray(payload?.Responses)) {
@@ -1531,12 +1528,19 @@ function assertSyncDeleteResponse(payload) {
   for (const item of payload.Responses) {
     const op = item?.Response;
     if (op && op.Code !== 1000) {
-      throw new ApiError(502, "UPSTREAM_ERROR", op.Error || "Delete operation failed", {
+      throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", {
         code: op.Code,
-        details: op.Details,
       });
     }
   }
+}
+
+function sanitizeUpstreamPayload(payload) {
+  const details = {};
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    details.code = payload.Code;
+  }
+  return details;
 }
 
 function getSetCookieHeaders(headers) {

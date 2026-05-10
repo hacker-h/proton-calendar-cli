@@ -190,7 +190,8 @@
         "body": {
           "error": {
             "code": "UNAUTHORIZED",
-            "message": "Missing bearer token"
+            "message": "Missing bearer token",
+            "requestId": "<request-id>"
           }
         }
       }
@@ -207,7 +208,8 @@
         "body": {
           "error": {
             "code": "INVALID_JSON",
-            "message": "Request body must be valid JSON"
+            "message": "Request body must be valid JSON",
+            "requestId": "<request-id>"
           }
         }
       }
@@ -228,7 +230,8 @@
         "body": {
           "error": {
             "code": "INVALID_PAYLOAD",
-            "message": "title must be a string"
+            "message": "title must be a string",
+            "requestId": "<request-id>"
           }
         }
       }
@@ -245,6 +248,7 @@
           "error": {
             "code": "AUTH_EXPIRED",
             "message": "Proton session is expired or unauthorized",
+            "requestId": "<request-id>",
             "details": {
               "reloginRequired": true
             }
@@ -264,6 +268,7 @@
           "error": {
             "code": "UPSTREAM_UNREACHABLE",
             "message": "Unable to reach Proton backend",
+            "requestId": "<request-id>",
             "details": {
               "cause": "network"
             }
@@ -282,7 +287,8 @@
         "body": {
           "error": {
             "code": "NOT_FOUND",
-            "message": "Route not found"
+            "message": "Route not found",
+            "requestId": "<request-id>"
           }
         }
       }

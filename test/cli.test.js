@@ -1803,6 +1803,44 @@ test("returns API_UNREACHABLE when API is down", async () => {
   assert.equal(payload.error.code, "API_UNREACHABLE");
 });
 
+test("CLI error output sanitizes raw upstream payload details", async () => {
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => jsonResponse(502, {
+      error: {
+        code: "UPSTREAM_ERROR",
+        message: "Upstream request failed",
+        requestId: "request-from-body",
+        details: {
+          status: 502,
+          payload: {
+            Code: 9001,
+            Error: "REFRESH-secret leaked upstream message",
+            Details: {
+              Cookie: "AUTH-uid-123=auth-secret",
+            },
+          },
+        },
+      },
+    }, [["x-request-id", "request-from-header"]]),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const serialized = stderr.value();
+  const payload = JSON.parse(serialized);
+  assert.equal(payload.error.code, "UPSTREAM_ERROR");
+  assert.deepEqual(payload.error.details, { status: 502, code: 9001, requestId: "request-from-header" });
+  assert.equal(serialized.includes("REFRESH-secret"), false);
+  assert.equal(serialized.includes("auth-secret"), false);
+  assert.equal(serialized.includes("payload"), false);
+});
+
 function createWriter() {
   let buffer = "";
   return {

@@ -2,6 +2,7 @@ import test from "node:test";
 import assert from "node:assert/strict";
 import * as openpgp from "openpgp";
 import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
+import { ApiError, toErrorPayload } from "../src/errors.js";
 import {
   buildCreateSyncRequestBody,
   buildSharedParts,
@@ -76,6 +77,73 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
     () => client.authStatus(),
     (error) => error?.code === "AUTH_EXPIRED" && error?.status === 401
   );
+});
+
+test("upstream Proton error details exclude raw payload secrets", async () => {
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: {
+      async getUIDCandidates() {
+        return ["uid-123"];
+      },
+      async getCookieHeader() {
+        return "pm-session=valid; pm-auth=valid";
+      },
+      async getPersistedSessions() {
+        return {};
+      },
+    },
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(200, {
+        Code: 9001,
+        Error: "REFRESH-secret leaked upstream message",
+        Details: {
+          AccessToken: "access-secret",
+          Cookie: "AUTH-uid-123=auth-secret",
+        },
+      });
+    },
+    maxRetries: 0,
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      const serialized = JSON.stringify({ message: error.message, details: error.details });
+      assert.equal(error.code, "UPSTREAM_ERROR");
+      assert.equal(error.message, "Unexpected upstream response");
+      assert.deepEqual(error.details, { code: 9001 });
+      assert.equal(serialized.includes("REFRESH-secret"), false);
+      assert.equal(serialized.includes("access-secret"), false);
+      assert.equal(serialized.includes("auth-secret"), false);
+      return true;
+    }
+  );
+});
+
+test("API error envelopes sanitize raw upstream payload details", () => {
+  const envelope = toErrorPayload(
+    new ApiError(502, "UPSTREAM_ERROR", "Upstream request failed", {
+      status: 502,
+      payload: {
+        Code: 9001,
+        Error: "REFRESH-secret leaked upstream message",
+        Details: {
+          Cookie: "AUTH-uid-123=auth-secret",
+        },
+      },
+    })
+  );
+
+  const serialized = JSON.stringify(envelope);
+  assert.deepEqual(envelope.error.details, { status: 502, code: 9001 });
+  assert.equal(serialized.includes("REFRESH-secret"), false);
+  assert.equal(serialized.includes("auth-secret"), false);
+  assert.equal(serialized.includes("payload"), false);
 });
 
 test("persisted session blobs use Proton legacy 16-byte AES-GCM IV", async () => {

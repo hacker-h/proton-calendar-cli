@@ -55,6 +55,34 @@ test("rejects wrong-content and wrong-length bearer tokens", async () => {
   }
 });
 
+test("API error responses include request id and sanitized upstream details", async () => {
+  const setup = await createFixture({
+    authStatusError: new ApiError(502, "UPSTREAM_ERROR", "Upstream request failed", {
+      status: 502,
+      payload: {
+        Code: 9001,
+        Error: "REFRESH-secret leaked upstream message",
+        Details: {
+          Cookie: "AUTH-uid-123=auth-secret",
+        },
+      },
+    }),
+  });
+  try {
+    const response = await apiRequest(setup, "GET", "/v1/auth/status");
+    const serialized = JSON.stringify(response.body);
+    assert.equal(response.status, 502);
+    assert.match(response.requestId, /^[0-9a-f-]{36}$/i);
+    assert.equal(response.body.error.requestId, response.requestId);
+    assert.deepEqual(response.body.error.details, { status: 502, code: 9001 });
+    assert.equal(serialized.includes("REFRESH-secret"), false);
+    assert.equal(serialized.includes("auth-secret"), false);
+    assert.equal(serialized.includes("payload"), false);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reports auth status and calendar scope configuration", async () => {
   const setup = await createFixture({
     targetCalendarId: null,
@@ -1277,6 +1305,7 @@ async function apiRequest(setup, method, route, body, options = {}) {
   return {
     status: response.status,
     body: parsed,
+    requestId: response.headers.get("x-request-id"),
   };
 }
 
