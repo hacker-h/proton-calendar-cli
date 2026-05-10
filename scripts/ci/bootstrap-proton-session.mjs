@@ -426,7 +426,7 @@ async function verifyCalendarApiSession(page, uidCandidates) {
           credentials: "include",
         });
 
-        let body = null;
+        let body;
         try {
           body = await response.json();
         } catch {
@@ -457,14 +457,6 @@ async function verifyCalendarApiSession(page, uidCandidates) {
     }
   }
   return null;
-}
-
-function isAuthenticatedCalendarUrl(url) {
-  return (
-    typeof url === "string" &&
-    ((/https:\/\/calendar\.proton\.me\/(u\/\d+)?/.test(url) && !/\/login/.test(url)) ||
-      (/https:\/\/account\.proton\.me\/(calendar|apps)/.test(url) && !/\/login/.test(url)))
-  );
 }
 
 async function dismissCookieBanner(page) {

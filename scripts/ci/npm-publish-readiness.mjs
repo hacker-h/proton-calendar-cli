@@ -87,7 +87,7 @@ async function assertReleaseVersionSource() {
 
 async function assertNoProjectNpmCredentials() {
   const npmrcPath = path.join(repoRoot, ".npmrc");
-  let npmrc = "";
+  let npmrc;
   try {
     npmrc = await readFile(npmrcPath, "utf8");
   } catch (error) {
