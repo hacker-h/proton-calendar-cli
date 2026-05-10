@@ -27,7 +27,7 @@ Usage:
   pc logout [options]
   pc doctor auth [options]
   pc calendars [options]
-  pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
+  pc ls [today|tomorrow|next N|w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
   pc new <field=value...> [--tz TIMEZONE]
   pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD]
   pc rm <eventId>
@@ -38,6 +38,9 @@ Examples:
   pc doctor auth
   pc calendars
   pc ls
+  pc ls today --title review
+  pc ls tomorrow --unprotected
+  pc ls next 7 --location "room a"
   pc ls w+
   pc ls m 7 2026
   pc ls --from 2026-07-01 --to 2026-07-31
@@ -2005,6 +2008,40 @@ function resolveShortcutRange(positional, nowFn) {
     };
   }
 
+  if (mode === "today" || mode === "td") {
+    const start = startOfUtcDay(now);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, 1).toISOString(),
+    };
+  }
+
+  if (mode === "tomorrow" || mode === "tm") {
+    const start = addDays(startOfUtcDay(now), 1);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, 1).toISOString(),
+    };
+  }
+
+  if (mode === "next") {
+    const days = Number(positional[1]);
+    if (!Number.isInteger(days) || days < 1 || days > 366) {
+      throw new CliError("INVALID_ARGS", "next window days must be an integer between 1 and 366");
+    }
+    if (positional[2] && positional[2] !== "day" && positional[2] !== "days") {
+      throw new CliError("INVALID_ARGS", "next window only accepts an optional 'days' suffix");
+    }
+    if (positional.length > 3) {
+      throw new CliError("INVALID_ARGS", "next window accepts only a day count");
+    }
+    const start = startOfUtcDay(now);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, days).toISOString(),
+    };
+  }
+
   if (mode === "w" || mode === "w+" || mode === "w++") {
     const weeks = mode === "w" ? 1 : mode === "w+" ? 2 : 3;
     const weekNumber = positional[1] ? Number(positional[1]) : null;
@@ -2384,6 +2421,10 @@ function startOfIsoWeek(date) {
   const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const day = utc.getUTCDay() === 0 ? 7 : utc.getUTCDay();
   return addDays(utc, 1 - day);
+}
+
+function startOfUtcDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function isoWeekYear(date) {

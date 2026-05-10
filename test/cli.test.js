@@ -816,6 +816,107 @@ test("ls explicit date range overrides shortcut", async () => {
   assert.equal(requests[0].searchParams.get("end"), "2026-08-01T00:00:00.000Z");
 });
 
+test("ls supports deterministic today and tomorrow windows", async () => {
+  const cases = [
+    {
+      argv: ["ls", "today"],
+      expectedStart: "2026-03-11T00:00:00.000Z",
+      expectedEnd: "2026-03-12T00:00:00.000Z",
+    },
+    {
+      argv: ["ls", "tomorrow"],
+      expectedStart: "2026-03-12T00:00:00.000Z",
+      expectedEnd: "2026-03-13T00:00:00.000Z",
+    },
+  ];
+
+  for (const current of cases) {
+    const requests = [];
+    const exitCode = await runPcCli(current.argv, {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(new URL(String(url)));
+        return jsonResponse(200, {
+          data: {
+            events: [],
+            nextCursor: null,
+          },
+        });
+      },
+      stdout: createWriter(),
+      stderr: createWriter(),
+    });
+
+    assert.equal(exitCode, 0);
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].searchParams.get("start"), current.expectedStart);
+    assert.equal(requests[0].searchParams.get("end"), current.expectedEnd);
+  }
+});
+
+test("ls next days window composes with filters", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "next", "7", "days", "--title", "review", "--location", "room b", "--protected"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async (url) => {
+      requests.push(new URL(String(url)));
+      return jsonResponse(200, {
+        data: {
+          events: [
+            { id: "evt-1", title: "Design Review", location: "Room B", protected: true },
+            { id: "evt-2", title: "Design Review", location: "Room A", protected: true },
+            { id: "evt-3", title: "Planning", location: "Room B", protected: true },
+            { id: "evt-4", title: "Design Review", location: "Room B", protected: false },
+          ],
+          nextCursor: null,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(requests.length, 1);
+  assert.equal(requests[0].searchParams.get("start"), "2026-03-11T00:00:00.000Z");
+  assert.equal(requests[0].searchParams.get("end"), "2026-03-18T00:00:00.000Z");
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.count, 1);
+  assert.equal(payload.data.events[0].id, "evt-1");
+});
+
+test("ls next rejects invalid day counts before API calls", async () => {
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["ls", "next", "0"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      throw new Error("fetch should not be called");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "next window days must be an integer between 1 and 366");
+});
+
 test("ls --protected filters to protected events only", async () => {
   const stdout = createWriter();
   const stderr = createWriter();
