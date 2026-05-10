@@ -816,6 +816,35 @@ test("ls explicit date range overrides shortcut", async () => {
   assert.equal(requests[0].searchParams.get("end"), "2026-08-01T00:00:00.000Z");
 });
 
+test("ls --start and --end date-only strings apply same boundary semantics as --from/--to", async () => {
+  const makeRunner = (argv) => {
+    const requests = [];
+    const exitCode = runPcCli(argv, {
+      env: { PC_API_BASE_URL: "http://127.0.0.1:8787", PC_API_TOKEN: "token" },
+      now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+      fetchImpl: async (url) => {
+        requests.push(new URL(String(url)));
+        return jsonResponse(200, { data: { events: [], nextCursor: null } });
+      },
+      stdout: createWriter(),
+      stderr: createWriter(),
+    });
+    return exitCode.then((code) => ({ code, requests }));
+  };
+
+  const [fromTo, startEnd] = await Promise.all([
+    makeRunner(["ls", "--from", "2026-07-01", "--to", "2026-07-31"]),
+    makeRunner(["ls", "--start", "2026-07-01", "--end", "2026-07-31"]),
+  ]);
+
+  assert.equal(fromTo.code, 0);
+  assert.equal(startEnd.code, 0);
+  assert.equal(fromTo.requests[0].searchParams.get("start"), "2026-07-01T00:00:00.000Z");
+  assert.equal(fromTo.requests[0].searchParams.get("end"), "2026-08-01T00:00:00.000Z");
+  assert.equal(startEnd.requests[0].searchParams.get("start"), fromTo.requests[0].searchParams.get("start"));
+  assert.equal(startEnd.requests[0].searchParams.get("end"), fromTo.requests[0].searchParams.get("end"));
+});
+
 test("ls supports deterministic today and tomorrow windows", async () => {
   const cases = [
     {

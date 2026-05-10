@@ -90,6 +90,10 @@ List options:
   --title <text>       Show only events whose title contains text (case-insensitive)
   --description <text> Show only events whose description contains text (case-insensitive)
   --location <text>    Show only events whose location contains text (case-insensitive)
+  --from <date>        Range start; YYYY-MM-DD stays at 00:00:00Z of that day
+  --to <date>          Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (inclusive through end of day)
+  --start <datetime>   Range start; YYYY-MM-DD advances to 00:00:00Z (same as --from)
+  --end <datetime>     Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (same as --to)
 
 Local config JSON (default: secrets/pc-cli.json):
   { "apiBaseUrl": "http://127.0.0.1:8787", "apiToken": "replace-me" }
