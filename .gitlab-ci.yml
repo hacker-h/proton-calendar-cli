@@ -15,7 +15,7 @@ cache:
 
 .pnpm_setup:
   before_script:
-    - command -v pnpm >/dev/null 2>&1 || (command -v corepack >/dev/null 2>&1 && corepack enable || npm install -g pnpm@10)
+    - command -v pnpm >/dev/null 2>&1 || (command -v corepack >/dev/null 2>&1 && corepack enable || npm install -g pnpm@11.0.8)
     - pnpm config set store-dir "$PNPM_STORE_DIR"
     - pnpm install --frozen-lockfile
 

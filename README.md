@@ -33,15 +33,27 @@ pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
 
 The generated API token is written only to the local config/env files; it is not printed in normal `pc login` output.
 
+Secret files are expected to be owner-only readable/writable on POSIX systems, for example `0600`. The CLI and API reject unsafe group/world-readable cookie bundles and local config files with `SECRET_FILE_UNSAFE_PERMISSIONS` before using them.
+
+To remove local generated secrets without deleting the parent `secrets/` directory or browser profiles, run:
+
+```bash
+pc logout
+```
+
+`pc logout` removes the configured/default CLI config, server env file, cookie bundle, and known relogin sidecars, reporting files that were already missing.
+
 `pnpm add -g .` registers this checkout's package bin so `pc` is available on your `PATH`. If `pc` is not found, check `pnpm bin -g` and run `pnpm setup` if pnpm has not configured `PNPM_HOME` yet. Local development fallback: `pnpm pc -- <command>` or `node src/cli.js <command>`.
 
 ## Commands
 
 | Command | Purpose | Example |
 | --- | --- | --- |
-| `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --target-calendar cal_123` |
+| `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --default-calendar cal_123` |
+| `pc logout` | Remove local CLI/server/cookie secret files and relogin sidecars | `pc logout` |
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
-| `pc ls` | List events; defaults to current ISO week | `pc ls w++ --title review` |
+| `pc calendars` | List discovered calendars and configured defaults | `pc calendars -o table` |
+| `pc ls` | List events; defaults to current ISO week | `pc ls next 7 --title review` |
 | `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
 | `pc edit` | PATCH-style update; only provided fields are sent | `pc edit evt-1 title="Updated" --clear description` |
 | `pc rm` | Delete an event or recurring scope | `pc rm evt-1 --scope series` |
@@ -50,6 +62,9 @@ Useful list examples:
 
 ```bash
 pc ls                              # current week
+pc ls today                        # current UTC day
+pc ls tomorrow                     # next UTC day
+pc ls next 7                       # next seven UTC days, starting today
 pc ls w+                           # current and next week
 pc ls w++                          # current and next two weeks
 pc ls m 7 2026                     # month
@@ -58,6 +73,7 @@ pc ls --from 2026-07-01 --to 2026-07-31
 pc ls --protected
 pc ls --unprotected
 pc ls --title review --location "room b"
+pc ls next 7 --title review --protected
 pc ls -o table
 ```
 
@@ -72,6 +88,9 @@ Supported event fields:
 - `protected` (defaults to `true`; set `false` to allow shared-calendar members to edit)
 - `recurrence` with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
 
+For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
+For monthly `byMonthDay`, values past the end of a shorter month fall back to that month's last day, so a `31` rule emits Feb 28/29 and Apr 30 instead of silently skipping those months.
+
 Recurring event scopes are `series`, `single`, and `following`. `single` and `following` require an occurrence start:
 
 ```bash
@@ -85,6 +104,7 @@ Notes:
 - `pc edit` is PATCH-style: omitted fields are not sent.
 - `pc edit --clear` currently supports `description` and `location`.
 - Supported recurrence frequencies are `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY`.
+- Recurrence expansion evaluates at most 50,000 candidates by default; set `RECURRENCE_MAX_ITERATIONS` on the API server to tune that safety cap. If the cap is exhausted, the API returns `RECURRENCE_ITERATION_LIMIT` instead of a partial recurrence list.
 
 ## Configuration And Auth
 
@@ -115,9 +135,11 @@ export TARGET_CALENDAR_ID=cal_123
 # optional: export DEFAULT_CALENDAR_ID=cal_123
 ```
 
+Run `pc calendars` after the API server is running to see the calendars visible to the saved Proton session and which one is configured as default or target. `pc login --default-calendar cal_123` writes `DEFAULT_CALENDAR_ID` and allows all calendars discovered during login. To change the local default later without re-running browser login, run `pc calendars --set-default cal_456 --server-env secrets/pc-server.env`, then restart the API server with the updated env file. `pc login --target-calendar cal_123` preserves the hard-lock mode for automations that must never mutate another calendar.
+
 `TARGET_CALENDAR_ID` hard-locks all requests to one calendar. Without it, `ALLOWED_CALENDAR_IDS` controls explicit calendar routes and `DEFAULT_CALENDAR_ID` is used for plain event commands.
 
-On Proton `401`/`403`, the server tries to refresh auth from saved `REFRESH-*` cookies and persists returned `Set-Cookie` headers back to the cookie bundle.
+On Proton `401`/`403`, the server tries to refresh auth from saved `REFRESH-*` cookies and persists returned `Set-Cookie` headers back to the cookie bundle. Cookie bundle writes use a sidecar lock at `COOKIE_BUNDLE_PATH.lock`, re-read the bundle under that lock, then atomically rename a same-directory temp file into place. This prevents concurrent CI workers from clobbering each other's refreshed cookies and avoids partial JSON at the bundle path after failed writes.
 
 Runtime browser relogin is available but disabled by the generated env file. Enable it only for unattended workers that need recovery beyond cookie refresh:
 
@@ -128,7 +150,7 @@ export PROTON_RELOGIN_COOLDOWN_MS=300000
 export PROTON_RELOGIN_LOCK_PATH=secrets/proton-cookies.json.relogin.lock
 ```
 
-The lock prevents multiple processes from opening Chrome at once; the cooldown avoids repeated failed relogin attempts.
+The relogin lock prevents multiple processes from opening Chrome at once; the cooldown avoids repeated failed relogin attempts. Stale cookie and relogin locks are removed after their grace windows so a crashed worker does not permanently block recovery.
 
 ## Automation Contract
 
@@ -138,9 +160,12 @@ Automation callers should treat `pc` as a JSON command surface with private-API 
 - Error output goes to stderr as `{ "error": { "code", "message", "details" } }`.
 - `error.code` is the stable key for scripts; `error.message` is for humans.
 - Passwords, cookie values, refresh tokens, session blobs, bearer tokens, and raw Proton payloads must not appear in normal output, logs, or CI artifacts.
+- `RATE_LIMITED` is retryable; respect `error.details.retryAfterSeconds` or `retryAfterMs` before trying again.
+- `AUTH_CHALLENGE_REQUIRED` is not retryable without a human; stop automation for captcha, MFA, account-lock, or human-verification states.
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
-- Run `pc doctor auth` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
+- Run `pc doctor auth --fail-on-relogin-required` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
 - Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
+- Continue API pagination with `nextCursor`; if a list command returns `EVENT_LIST_PAGE_LIMIT` or `UPSTREAM_EVENT_PAGE_LIMIT`, narrow the date range or calendar scope instead of treating the partial window as complete.
 - Use `X-Idempotency-Key` for HTTP API mutation retries when available; the CLI does not expose an idempotency flag yet, so retry CLI mutations only after checking whether the event already changed.
 - Back off on auth challenges, rate limits, `Retry-After`, captcha, or human-verification states. Do not loop through repeated browser logins.
 - Treat Proton private API shape drift as expected operational failure. Alert, preserve sanitized logs, and require human triage instead of silently continuing.
@@ -150,14 +175,14 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Current general failure code |
-| `2` | Reserved for validation or usage failure |
-| `3` | Reserved for auth/session failure |
-| `4` | Reserved for local API unavailable |
-| `5` | Reserved for Proton upstream failure |
-| `6` | Reserved for unsupported private-API state or login challenge |
+| `1` | General or internal failure |
+| `2` | Validation, usage, configuration, or local secret-permission failure |
+| `3` | Auth/session/login failure |
+| `4` | Local API unavailable |
+| `5` | Proton upstream, rate-limit, pagination-cap, or private API drift failure |
+| `6` | Unsupported private-API state or login challenge |
 
-Current commands return `1` for all failures; future behavior should move toward the narrower reserved codes without changing the JSON envelopes.
+The JSON envelope remains the stable machine-readable contract; use `error.code` for exact branching and the process exit code for broad CI/action categories.
 
 
 ## Automation Guardrails
@@ -168,10 +193,18 @@ Recommended CI/CD pattern:
 
 ```bash
 set -euo pipefail
-pc doctor auth -o json
-pc ls --from 2026-07-01 --to 2026-07-07 -o json
+pc doctor auth -o json --fail-on-relogin-required
+pc ls next 7 --title deploy -o json
 pc new title="Deploy window" start=2026-07-02T10:00:00Z end=2026-07-02T10:30:00Z timezone=UTC -o json
 ```
+
+For noninteractive jobs, prefer:
+
+```bash
+pc doctor auth -o json --fail-on-relogin-required
+```
+
+`pc doctor auth` emits stable JSON fields for automation: `status`, `automationReady`, `reloginRequired`, `refreshPossible`, `refreshAttempted`, `refreshSucceeded`, and `nextStep.code`. Treat `automationReady: false` or `AUTH_RELOGIN_REQUIRED` as a hard stop before mutations. Current status values are `access_valid`, `refresh_recovered`, `refresh_failed`, and `refresh_unavailable`.
 
 Operational defaults:
 
@@ -179,7 +212,7 @@ Operational defaults:
 - Keep date windows small and bounded; do not scan whole calendars on every run.
 - Keep secrets under `secrets/` or CI secret storage and never upload cookie bundles as artifacts.
 - Fail closed when output is not valid JSON or when `error.code` is unknown.
-- For scheduled jobs, add exponential backoff and notify a human after the first auth or private-API drift failure.
+- For scheduled jobs, respect `RATE_LIMITED` retry details before retrying, add exponential backoff for transient upstream failures, and notify a human after the first auth challenge or private-API drift failure.
 - Keep live Proton checks separate from required pull-request CI unless the runner has dedicated credentials and safe cleanup.
 
 ## Development
@@ -189,13 +222,14 @@ pnpm test              # mocked/unit suite
 pnpm run test:unit:junit # mocked/unit suite with reports/junit.xml
 pnpm run ci:local      # unit suite + package/bin smoke + npm publish readiness
 pnpm run readiness:npm-publish # metadata, package contents, and npm dry-run readiness
+pnpm run ci:live       # bootstrap live Proton session, start API, run live tests
 pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
 Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
 
-The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, and then runs live tests. Pull requests do not require these secrets or the live canary.
+The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests do not require these secrets or the live canary.
 
 ## Releases
 
@@ -217,9 +251,9 @@ If npm publishing is enabled later, prefer npm trusted publishing over long-live
 `NPM_TOKEN` credentials: configure this repository and release workflow as the
 trusted publisher on npmjs.com, add GitHub Actions OIDC permission
 `id-token: write` only to the release publishing job, use a supported npm CLI,
-and then add `@semantic-release/npm` to the semantic-release plugin chain. Trusted
-publishing from GitHub Actions can generate npm provenance for public packages;
-keep PR checks credential-free and dry-run only.
+and then add `@semantic-release/npm` to the semantic-release plugin chain.
+Trusted publishing from GitHub Actions can generate npm provenance for public
+packages; keep PR checks credential-free and dry-run only.
 
 Local release checks:
 

@@ -3,10 +3,11 @@
 import { randomBytes } from "node:crypto";
 import { spawn } from "node:child_process";
 import { realpathSync } from "node:fs";
-import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { mkdir, readFile, unlink, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { DEFAULT_PROTON_APP_VERSION } from "./constants.js";
+import { assertSafeSecretFile, chmodOwnerOnly } from "./secret-file-safety.js";
 import { CookieSessionStore } from "./session/cookie-session-store.js";
 
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
@@ -15,22 +16,31 @@ const DEFAULT_SERVER_ENV_PATH = "secrets/pc-server.env";
 const DEFAULT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies.json";
 const DEFAULT_PROTON_BASE_URL = "https://calendar.proton.me";
 const DEFAULT_TIMEOUT_MS = 15000;
+const LIST_PAGE_LIMIT = 100;
 const CLEARABLE_FIELDS = new Set(["description", "location"]);
+const VALID_TIMEZONES = new Set(["UTC", ...Intl.supportedValuesOf("timeZone")]);
 
 const HELP_TEXT = `pc - Proton Calendar CLI
 
 Usage:
   pc login [options]
+  pc logout [options]
   pc doctor auth [options]
-  pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
-  pc new <field=value...>
-  pc edit <eventId> <field=value...> [--clear FIELD]
+  pc calendars [options]
+  pc ls [today|tomorrow|next N|w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
+  pc new <field=value...> [--tz TIMEZONE]
+  pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD]
   pc rm <eventId>
 
 Examples:
   pc login
+  pc logout
   pc doctor auth
+  pc calendars
   pc ls
+  pc ls today --title review
+  pc ls tomorrow --unprotected
+  pc ls next 7 --location "room a"
   pc ls w+
   pc ls m 7 2026
   pc ls --from 2026-07-01 --to 2026-07-31
@@ -53,15 +63,26 @@ Environment:
 
 Login options:
   --target-calendar <id>  Use specific calendar ID (default: first available)
+  --default-calendar <id> Use specific default calendar while allowing all discovered calendars
   --timeout <seconds>     Bootstrap login timeout (forwarded)
   --poll <seconds>        Bootstrap polling interval (forwarded)
   --profile-dir <path>    Chrome profile directory (forwarded)
   --chrome-path <path>    Chrome executable path (forwarded)
   --cookie-bundle <path>  Cookie bundle output path
 
+Logout options:
+  --cookie-bundle <path>  Cookie bundle path to remove
+  --pc-config <path>      Local CLI config path to remove
+  --server-env <path>     Server env path to remove
+
 Doctor options:
   --cookie-bundle <path>  Cookie bundle path to inspect
   --proton-base-url <url> Proton base URL to probe
+  --fail-on-relogin-required  Exit non-zero when browser login is required
+
+Calendars options:
+  --set-default <id> Set the default calendar in the generated server env file
+  --server-env <path> Server env file to update when setting default
 
 List options:
   --protected         Show only protected events
@@ -82,6 +103,46 @@ class CliError extends Error {
     this.details = details;
   }
 }
+
+const CLI_EXIT_CODES = Object.freeze({
+  GENERAL_FAILURE: 1,
+  VALIDATION_OR_USAGE: 2,
+  AUTH_OR_SESSION: 3,
+  LOCAL_API_UNAVAILABLE: 4,
+  PROTON_UPSTREAM: 5,
+  UNSUPPORTED_PRIVATE_API_STATE: 6,
+});
+
+const VALIDATION_ERROR_CODES = new Set([
+  "CONFIG_ERROR",
+  "EMPTY_PATCH",
+  "INVALID_ARGS",
+  "INVALID_TIMEZONE",
+  "SECRET_FILE_UNSAFE_PERMISSIONS",
+  "UNKNOWN_COMMAND",
+]);
+
+const AUTH_ERROR_CODES = new Set([
+  "AUTH_EXPIRED",
+  "AUTH_RELOGIN_REQUIRED",
+  "LOGIN_FAILED",
+  "UID_MISSING",
+]);
+
+const UPSTREAM_ERROR_CODES = new Set([
+  "EVENT_LIST_PAGE_LIMIT",
+  "PROTON_PERMISSION_DENIED",
+  "PROTON_PLAN_REQUIRED",
+  "RATE_LIMITED",
+  "RECURRENCE_ITERATION_LIMIT",
+  "UPSTREAM_ERROR",
+  "UPSTREAM_EVENT_PAGE_LIMIT",
+  "UPSTREAM_UNREACHABLE",
+]);
+
+const UNSUPPORTED_PRIVATE_API_ERROR_CODES = new Set([
+  "AUTH_CHALLENGE_REQUIRED",
+]);
 
 export async function runPcCli(argv, options = {}) {
   const env = options.env || process.env;
@@ -116,6 +177,12 @@ export async function runPcCli(argv, options = {}) {
       return 0;
     }
 
+    if (command === "logout") {
+      const result = await runLogoutCommand(rest, { env });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
     if (command === "doctor") {
       const result = await runDoctorCommand(rest, {
         env,
@@ -125,40 +192,68 @@ export async function runPcCli(argv, options = {}) {
       return 0;
     }
 
+    const apiCommand = normalizeApiCommand(command);
+    if (!apiCommand) {
+      throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`);
+    }
+
     const localConfig = await readLocalConfig(env);
     const apiBaseUrl = readBaseUrl(env, localConfig);
     const apiToken = readToken(env, localConfig);
 
-    if (command === "ls" || command === "list") {
+    if (apiCommand === "list") {
       const result = await runListCommand(rest, { apiBaseUrl, apiToken, fetchImpl, now });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "new" || command === "create") {
+    if (apiCommand === "calendars") {
+      const result = await runCalendarsCommand(rest, { env, apiBaseUrl, apiToken, fetchImpl });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
+    if (apiCommand === "create") {
       const result = await runCreateCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "edit") {
+    if (apiCommand === "edit") {
       const result = await runEditCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
 
-    if (command === "rm" || command === "delete") {
+    if (apiCommand === "delete") {
       const result = await runDeleteCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
-
-    throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`);
   } catch (error) {
     const payload = toCliErrorPayload(error);
     write(stderr, `${JSON.stringify(payload, null, 2)}\n`);
-    return 1;
+    return readCliExitCode(payload.error?.code);
   }
+}
+
+function normalizeApiCommand(command) {
+  if (command === "ls" || command === "list") {
+    return "list";
+  }
+  if (command === "new" || command === "create") {
+    return "create";
+  }
+  if (command === "edit") {
+    return "edit";
+  }
+  if (command === "rm" || command === "delete") {
+    return "delete";
+  }
+  if (command === "calendars") {
+    return "calendars";
+  }
+  return null;
 }
 
 async function runLoginCommand(args, context) {
@@ -198,7 +293,10 @@ async function runLoginCommand(args, context) {
   });
 
   const calendars = Array.isArray(calendarsPayload?.Calendars) ? calendarsPayload.Calendars : [];
-  const targetCalendarId = selectTargetCalendarId(calendars, parsed.targetCalendarId);
+  const calendarConfig = selectLoginCalendarConfig(calendars, {
+    targetCalendarId: parsed.targetCalendarId,
+    defaultCalendarId: parsed.defaultCalendarId,
+  });
 
   const generateToken = context.generateToken || (() => randomBytes(24).toString("base64url"));
   const apiToken = String(generateToken());
@@ -213,7 +311,7 @@ async function runLoginCommand(args, context) {
 
   await writeServerEnv(parsed.serverEnvPath, {
     apiToken,
-    targetCalendarId,
+    ...calendarConfig,
     cookieBundlePath: parsed.cookieBundlePath,
     protonBaseUrl: parsed.protonBaseUrl,
     apiBaseUrl: parsed.apiBaseUrl,
@@ -225,7 +323,9 @@ async function runLoginCommand(args, context) {
       data: {
         login: "ok",
         uid,
-        targetCalendarId,
+        targetCalendarId: calendarConfig.targetCalendarId,
+        defaultCalendarId: calendarConfig.defaultCalendarId,
+        allowedCalendarIds: calendarConfig.allowedCalendarIds,
         cookieBundlePath: parsed.cookieBundlePath,
         pcConfigPath: parsed.pcConfigPath,
         serverEnvPath: parsed.serverEnvPath,
@@ -314,29 +414,159 @@ async function runDoctorCommand(args, context) {
       : refreshAttempted
         ? "refresh_failed"
         : "refresh_unavailable";
+  const nextStep = readDoctorAuthNextStep({ status, reloginRequired, refreshPossible });
+  const data = {
+    topic: "auth",
+    status,
+    automationReady: !reloginRequired,
+    reloginRequired,
+    refreshPossible,
+    refreshAttempted,
+    refreshSucceeded,
+    nextStep,
+    uid: probeAfter?.uid || null,
+    host: probeAfter?.protonBaseUrl || null,
+    uidCandidates,
+    protonHosts,
+    cookieBundlePath: parsed.cookieBundlePath,
+    authCookies: {
+      before,
+      after,
+    },
+    suggestions: [nextStep.message],
+  };
+
+  if (parsed.failOnReloginRequired && reloginRequired) {
+    throw new CliError("AUTH_RELOGIN_REQUIRED", nextStep.message, data);
+  }
+
+  return {
+    output: parsed.output,
+    payload: {
+      data,
+    },
+  };
+}
+
+async function runCalendarsCommand(args, context) {
+  const parsed = parseCalendarsArgs(args, context.env);
+  const payload = await requestJson(context.fetchImpl, {
+    apiBaseUrl: context.apiBaseUrl,
+    apiToken: context.apiToken,
+    method: "GET",
+    path: "/v1/calendars",
+  });
+
+  if (!parsed.defaultCalendarId) {
+    return {
+      output: parsed.output,
+      payload,
+    };
+  }
+
+  const calendars = Array.isArray(payload?.data?.calendars) ? payload.data.calendars : [];
+  const allowedCalendarIds = calendars.map((calendar) => String(calendar?.id || "")).filter(Boolean);
+  if (!allowedCalendarIds.includes(parsed.defaultCalendarId)) {
+    throw new CliError("INVALID_ARGS", `Requested calendar not found: ${parsed.defaultCalendarId}`);
+  }
+  if (payload?.data?.targetCalendarId) {
+    throw new CliError(
+      "INVALID_ARGS",
+      "Cannot set a default calendar while TARGET_CALENDAR_ID hard-lock mode is active. Re-run pc login --default-calendar to switch modes."
+    );
+  }
+
+  await updateServerEnvCalendarConfig(parsed.serverEnvPath, {
+    apiToken: context.apiToken,
+    apiBaseUrl: context.apiBaseUrl,
+    defaultCalendarId: parsed.defaultCalendarId,
+    allowedCalendarIds,
+    env: context.env,
+  });
+
+  const nextPayload = {
+    ...payload,
+    data: {
+      ...payload.data,
+      defaultCalendarId: parsed.defaultCalendarId,
+      allowedCalendarIds,
+      calendars: calendars.map((calendar) => ({
+        ...calendar,
+        default: calendar.id === parsed.defaultCalendarId,
+      })),
+      serverEnvPath: parsed.serverEnvPath,
+    },
+  };
+
+  return {
+    output: parsed.output,
+    payload: nextPayload,
+  };
+}
+
+function readDoctorAuthNextStep({ status, reloginRequired, refreshPossible }) {
+  if (!reloginRequired) {
+    return {
+      code: "proceed",
+      message: "Auth is ready for unattended calendar operations.",
+    };
+  }
+
+  if (status === "refresh_failed") {
+    return {
+      code: "rerun_login_after_failed_refresh",
+      message: "Refresh cookies were present but could not recover the session; run `pc login` interactively.",
+    };
+  }
+
+  if (!refreshPossible) {
+    return {
+      code: "rerun_login_no_refresh_cookie",
+      message: "No usable refresh cookie was found; run `pc login` interactively.",
+    };
+  }
+
+  return {
+    code: "rerun_login",
+    message: "Run `pc login` and complete browser sign-in.",
+  };
+}
+
+async function runLogoutCommand(args, context) {
+  const parsed = parseLogoutArgs(args, context.env);
+  const targets = [
+    { kind: "cliConfig", path: parsed.pcConfigPath },
+    { kind: "serverEnv", path: parsed.serverEnvPath },
+    { kind: "cookieBundle", path: parsed.cookieBundlePath },
+    { kind: "reloginLock", path: `${parsed.cookieBundlePath}.relogin.lock` },
+    { kind: "reloginState", path: `${parsed.cookieBundlePath}.relogin-state.json` },
+  ];
+
+  const removed = [];
+  const missing = [];
+  const failed = [];
+
+  for (const target of targets) {
+    try {
+      await unlink(target.path);
+      removed.push(target);
+    } catch (error) {
+      if (error?.code === "ENOENT") {
+        missing.push(target);
+        continue;
+      }
+      failed.push({ ...target, code: error?.code || "UNLINK_FAILED", message: error?.message || "Unable to remove file" });
+    }
+  }
 
   return {
     output: parsed.output,
     payload: {
       data: {
-        topic: "auth",
-        status,
-        reloginRequired,
-        refreshPossible,
-        refreshAttempted,
-        refreshSucceeded,
-        uid: probeAfter?.uid || null,
-        host: probeAfter?.protonBaseUrl || null,
-        uidCandidates,
-        protonHosts,
-        cookieBundlePath: parsed.cookieBundlePath,
-        authCookies: {
-          before,
-          after,
-        },
-        suggestions: reloginRequired
-          ? ["Run `pc login` and complete browser sign-in."]
-          : ["Auth looks recoverable with current refresh cookies."],
+        logout: failed.length === 0 ? "ok" : "partial",
+        removed,
+        missing,
+        failed,
       },
     },
   };
@@ -348,6 +578,7 @@ function parseDoctorArgs(args, env) {
     topic: "auth",
     cookieBundlePath: path.resolve(DEFAULT_COOKIE_BUNDLE_PATH),
     protonBaseUrl: env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
+    failOnReloginRequired: false,
   };
 
   for (let i = 0; i < args.length; i += 1) {
@@ -364,6 +595,10 @@ function parseDoctorArgs(args, env) {
       state.protonBaseUrl = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--fail-on-relogin-required") {
+      state.failOnReloginRequired = true;
+      continue;
+    }
     if (token.startsWith("-")) {
       throw new CliError("INVALID_ARGS", `Unknown doctor option: ${token}`);
     }
@@ -375,6 +610,7 @@ function parseDoctorArgs(args, env) {
     topic: state.topic,
     cookieBundlePath: state.cookieBundlePath,
     protonBaseUrl: state.protonBaseUrl,
+    failOnReloginRequired: state.failOnReloginRequired,
   };
 }
 
@@ -426,6 +662,7 @@ function parseLoginArgs(args, env) {
     apiBaseUrl: env.PC_API_BASE_URL || DEFAULT_API_BASE_URL,
     protonBaseUrl: env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
     targetCalendarId: null,
+    defaultCalendarId: null,
     timeout: null,
     poll: null,
     profileDir: null,
@@ -465,6 +702,10 @@ function parseLoginArgs(args, env) {
       state.targetCalendarId = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--default-calendar") {
+      state.defaultCalendarId = requireValue(args, ++i, token);
+      continue;
+    }
     if (token === "--timeout") {
       state.timeout = requireValue(args, ++i, token);
       continue;
@@ -490,6 +731,10 @@ function parseLoginArgs(args, env) {
       continue;
     }
     throw new CliError("INVALID_ARGS", `Unknown login option: ${token}`);
+  }
+
+  if (state.targetCalendarId && state.defaultCalendarId) {
+    throw new CliError("INVALID_ARGS", "Use either --target-calendar or --default-calendar, not both");
   }
 
   const bootstrapArgs = [];
@@ -521,7 +766,75 @@ function parseLoginArgs(args, env) {
     apiBaseUrl: state.apiBaseUrl,
     protonBaseUrl: state.protonBaseUrl,
     targetCalendarId: state.targetCalendarId,
+    defaultCalendarId: state.defaultCalendarId,
     bootstrapArgs,
+  };
+}
+
+function parseLogoutArgs(args, env) {
+  const state = {
+    output: "json",
+    cookieBundlePath: path.resolve(env.COOKIE_BUNDLE_PATH || DEFAULT_COOKIE_BUNDLE_PATH),
+    pcConfigPath: path.resolve(env.PC_CONFIG_PATH || DEFAULT_LOCAL_CONFIG_PATH),
+    serverEnvPath: path.resolve(env.PC_SERVER_ENV_PATH || DEFAULT_SERVER_ENV_PATH),
+  };
+
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+
+    if (token === "-o" || token === "--output") {
+      state.output = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--cookie-bundle") {
+      state.cookieBundlePath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    if (token === "--pc-config") {
+      state.pcConfigPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    if (token === "--server-env") {
+      state.serverEnvPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    throw new CliError("INVALID_ARGS", `Unknown logout option: ${token}`);
+  }
+
+  return {
+    output: normalizeOutput(state.output),
+    cookieBundlePath: state.cookieBundlePath,
+    pcConfigPath: state.pcConfigPath,
+    serverEnvPath: state.serverEnvPath,
+  };
+}
+
+function parseCalendarsArgs(args, env) {
+  const state = {
+    output: "json",
+    defaultCalendarId: null,
+    serverEnvPath: path.resolve(env.PC_SERVER_ENV_PATH || DEFAULT_SERVER_ENV_PATH),
+  };
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === "-o" || token === "--output") {
+      state.output = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--set-default") {
+      state.defaultCalendarId = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--server-env") {
+      state.serverEnvPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
+    throw new CliError("INVALID_ARGS", `Unknown calendars option: ${token}`);
+  }
+  return {
+    output: normalizeOutput(state.output),
+    defaultCalendarId: state.defaultCalendarId,
+    serverEnvPath: state.serverEnvPath,
   };
 }
 
@@ -548,6 +861,17 @@ async function runBootstrapScript(bootstrapArgs) {
 }
 
 async function readCookieBundle(cookieBundlePath) {
+  try {
+    await assertSafeSecretFile(cookieBundlePath, {
+      createError: (message, details) => new CliError("SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw error;
+    }
+    throw new CliError("LOGIN_FAILED", `Cookie bundle file not found: ${cookieBundlePath}`);
+  }
+
   let content;
   try {
     content = await readFile(cookieBundlePath, "utf8");
@@ -588,6 +912,10 @@ async function findWorkingUid(input) {
         });
         return { uid, protonBaseUrl };
       } catch (error) {
+        if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+          throw error;
+        }
+
         const refreshed = await attemptLoginRefresh({
           fetchImpl: input.fetchImpl,
           protonHosts: input.protonHosts,
@@ -613,7 +941,10 @@ async function findWorkingUid(input) {
             pathname: "/api/calendar/v1",
           });
           return { uid, protonBaseUrl };
-        } catch {
+        } catch (error) {
+          if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+            throw error;
+          }
           continue;
         }
       }
@@ -637,7 +968,10 @@ async function fetchCalendarsForLogin(input) {
         method: "GET",
         pathname: "/api/calendar/v1",
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+        throw error;
+      }
       continue;
     }
   }
@@ -817,34 +1151,59 @@ function buildProtonHosts(primary) {
   return normalized;
 }
 
-function selectTargetCalendarId(calendars, requestedCalendarId) {
+function selectLoginCalendarConfig(calendars, options) {
   const ids = calendars
     .map((calendar) => (calendar && typeof calendar.ID === "string" ? calendar.ID : ""))
     .filter(Boolean);
 
-  if (requestedCalendarId) {
-    if (ids.length > 0 && !ids.includes(requestedCalendarId)) {
-      throw new CliError("INVALID_ARGS", `Requested calendar not found: ${requestedCalendarId}`);
-    }
-    return requestedCalendarId;
+  if (options.targetCalendarId) {
+    assertKnownCalendarId(ids, options.targetCalendarId);
+    return {
+      targetCalendarId: options.targetCalendarId,
+      defaultCalendarId: null,
+      allowedCalendarIds: [],
+    };
+  }
+
+  if (options.defaultCalendarId) {
+    assertKnownCalendarId(ids, options.defaultCalendarId);
+    return {
+      targetCalendarId: null,
+      defaultCalendarId: options.defaultCalendarId,
+      allowedCalendarIds: ids,
+    };
   }
 
   if (ids.length === 0) {
     throw new CliError("LOGIN_FAILED", "No calendars found for logged-in account");
   }
 
-  return ids[0];
+  return {
+    targetCalendarId: ids[0],
+    defaultCalendarId: null,
+    allowedCalendarIds: [],
+  };
+}
+
+function assertKnownCalendarId(ids, calendarId) {
+  if (ids.length === 0) {
+    throw new CliError("LOGIN_FAILED", "No calendars found for logged-in account");
+  }
+  if (!ids.includes(calendarId)) {
+    throw new CliError("INVALID_ARGS", `Requested calendar not found: ${calendarId}`);
+  }
 }
 
 async function writeJson(filePath, payload) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
+  await chmodOwnerOnly(filePath);
 }
 
 async function writeServerEnv(filePath, values) {
   const lines = [
     `export API_BEARER_TOKEN=${quoteEnv(values.apiToken)}`,
-    `export TARGET_CALENDAR_ID=${quoteEnv(values.targetCalendarId)}`,
+    ...buildServerCalendarEnv(values),
     `export COOKIE_BUNDLE_PATH=${quoteEnv(values.cookieBundlePath)}`,
     `export PROTON_BASE_URL=${quoteEnv(values.protonBaseUrl)}`,
     `export PC_API_BASE_URL=${quoteEnv(values.apiBaseUrl)}`,
@@ -863,6 +1222,65 @@ async function writeServerEnv(filePath, values) {
 
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, lines.join("\n"), { mode: 0o600 });
+  await chmodOwnerOnly(filePath);
+}
+
+async function updateServerEnvCalendarConfig(filePath, values) {
+  const existing = await readServerEnvFile(filePath);
+  await writeServerEnv(filePath, {
+    apiToken: existing.API_BEARER_TOKEN || existing.PC_API_TOKEN || values.apiToken,
+    targetCalendarId: null,
+    defaultCalendarId: values.defaultCalendarId,
+    allowedCalendarIds: values.allowedCalendarIds,
+    cookieBundlePath: existing.COOKIE_BUNDLE_PATH || values.env.COOKIE_BUNDLE_PATH || path.resolve(DEFAULT_COOKIE_BUNDLE_PATH),
+    protonBaseUrl: existing.PROTON_BASE_URL || values.env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
+    apiBaseUrl: existing.PC_API_BASE_URL || values.apiBaseUrl,
+  });
+}
+
+async function readServerEnvFile(filePath) {
+  let raw;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new CliError("CONFIG_ERROR", `Server env file not found: ${filePath}`);
+    }
+    throw error;
+  }
+
+  const values = {};
+  for (const line of raw.split("\n")) {
+    const match = line.match(/^export\s+([A-Z0-9_]+)=(.*)$/);
+    if (!match) {
+      continue;
+    }
+    values[match[1]] = parseEnvValue(match[2]);
+  }
+  return values;
+}
+
+function parseEnvValue(raw) {
+  const value = raw.trim();
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replaceAll('\\"', '"');
+  }
+  return value;
+}
+
+function buildServerCalendarEnv(values) {
+  if (values.targetCalendarId) {
+    return [`export TARGET_CALENDAR_ID=${quoteEnv(values.targetCalendarId)}`];
+  }
+
+  return [
+    `export ALLOWED_CALENDAR_IDS=${quoteEnv(formatCsv(values.allowedCalendarIds || []))}`,
+    `export DEFAULT_CALENDAR_ID=${quoteEnv(values.defaultCalendarId || "")}`,
+  ];
+}
+
+function formatCsv(values) {
+  return [...new Set(values)].join(",");
 }
 
 function quoteEnv(value) {
@@ -900,6 +1318,14 @@ async function requestProtonJson(fetchImpl, input) {
   const text = await response.text();
   const payload = parseMaybeJson(text);
 
+  if (response.status === 429) {
+    throw new CliError("RATE_LIMITED", "Proton rate limit exceeded", {
+      status: 429,
+      retryable: true,
+      ...readRetryAfterDetails(response),
+    });
+  }
+
   if (response.status === 401 || response.status === 403) {
     throw new CliError("AUTH_EXPIRED", "Proton session is unauthorized or expired");
   }
@@ -907,15 +1333,13 @@ async function requestProtonJson(fetchImpl, input) {
   if (!response.ok) {
     throw new CliError("LOGIN_FAILED", "Proton request failed", {
       status: response.status,
-      payload,
+      ...sanitizeUpstreamPayload(payload),
     });
   }
 
   if (payload && typeof payload === "object" && typeof payload.Code === "number") {
     if (![1000, 1001].includes(payload.Code)) {
-      throw new CliError("LOGIN_FAILED", payload.Error || "Unexpected Proton response", {
-        payload,
-      });
+      throw new CliError("LOGIN_FAILED", "Unexpected Proton response", sanitizeUpstreamPayload(payload));
     }
   }
 
@@ -1034,8 +1458,9 @@ async function runListCommand(args, context) {
   let cursor = null;
   let nextCursor = null;
   let pages = 0;
+  let maxResultsSatisfied = false;
 
-  while (pages < 100) {
+  while (pages < LIST_PAGE_LIMIT) {
     const response = await requestJson(context.fetchImpl, {
       apiBaseUrl: context.apiBaseUrl,
       apiToken: context.apiToken,
@@ -1048,6 +1473,7 @@ async function runListCommand(args, context) {
         ...(cursor ? { cursor } : {}),
       },
     });
+    pages += 1;
 
     const rows = Array.isArray(response?.data?.events) ? response.data.events : [];
     events.push(...rows);
@@ -1057,11 +1483,20 @@ async function runListCommand(args, context) {
       break;
     }
     if (parsed.maxResults !== null && events.filter((event) => matchesListFilters(event, parsed)).length >= parsed.maxResults) {
+      maxResultsSatisfied = true;
       break;
     }
 
     cursor = nextCursor;
-    pages += 1;
+  }
+
+  if (nextCursor && !maxResultsSatisfied) {
+    throw new CliError("EVENT_LIST_PAGE_LIMIT", "Event listing exceeded the page limit", {
+      range: parsed.range,
+      pageLimit: LIST_PAGE_LIMIT,
+      pageSize: parsed.pageSize,
+      nextCursor,
+    });
   }
 
   const filteredEvents = events.filter((event) => matchesListFilters(event, parsed));
@@ -1092,6 +1527,7 @@ async function runCreateCommand(args, context) {
   if (!parsed.patch.end) {
     throw new CliError("INVALID_ARGS", "end is required (end=<ISO>) for pc new");
   }
+  validateStartBeforeEnd(parsed.patch.start, parsed.patch.end);
   if (!parsed.patch.timezone) {
     parsed.patch.timezone = "UTC";
   }
@@ -1118,6 +1554,9 @@ async function runEditCommand(args, context) {
   const parsed = await parseMutationArgs(args, { requireEventId: true });
   if (Object.keys(parsed.patch).length === 0) {
     throw new CliError("EMPTY_PATCH", "No fields to update. Provide field=value, --patch, or --clear.");
+  }
+  if (parsed.patch.start !== undefined && parsed.patch.end !== undefined) {
+    validateStartBeforeEnd(parsed.patch.start, parsed.patch.end);
   }
 
   const path = parsed.calendarId
@@ -1303,6 +1742,7 @@ async function parseMutationArgs(args, options = {}) {
     eventId: null,
     scope: null,
     occurrenceStart: null,
+    timezone: null,
     patchInput: null,
     clearFields: [],
     assignments: [],
@@ -1335,6 +1775,10 @@ async function parseMutationArgs(args, options = {}) {
       state.occurrenceStart = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--tz" || token === "--timezone") {
+      state.timezone = requireValue(args, ++i, token);
+      continue;
+    }
     if (token === "--patch") {
       state.patchInput = requireValue(args, ++i, token);
       continue;
@@ -1361,9 +1805,16 @@ async function parseMutationArgs(args, options = {}) {
     ...assignmentPatch,
   };
 
+  if (state.timezone !== null) {
+    patch.timezone = state.timezone;
+  }
+
   for (const field of state.clearFields) {
     patch[field] = "";
   }
+
+  validateStringPatchValues(patch, state.clearFields);
+  validateTimezonePatch(patch);
 
   return {
     output: normalizeOutput(state.output),
@@ -1474,6 +1925,29 @@ function normalizeFieldPath(raw) {
   return key;
 }
 
+function validateTimezonePatch(patch) {
+  if (!Object.hasOwn(patch, "timezone")) {
+    return;
+  }
+
+  const timezone = patch.timezone;
+  if (typeof timezone !== "string" || !VALID_TIMEZONES.has(timezone)) {
+    throw new CliError("INVALID_TIMEZONE", `timezone must be UTC or a valid IANA time zone: ${timezone}`);
+  }
+}
+
+function validateStringPatchValues(patch, clearFields) {
+  const cleared = new Set(clearFields);
+  for (const field of ["title", "description", "location"]) {
+    if (!Object.hasOwn(patch, field) || cleared.has(field)) {
+      continue;
+    }
+    if (typeof patch[field] === "string" && patch[field].trim() === "") {
+      throw new CliError("INVALID_ARGS", `${field} cannot be blank`);
+    }
+  }
+}
+
 function normalizeClearField(raw) {
   const field = normalizeFieldPath(raw);
   if (!CLEARABLE_FIELDS.has(field)) {
@@ -1501,10 +1975,10 @@ function parseAssignmentValue(raw) {
     try {
       return JSON.parse(trimmed);
     } catch {
-      return value;
+      return trimmed;
     }
   }
-  return value;
+  return trimmed;
 }
 
 function setPathValue(target, parts, value) {
@@ -1524,20 +1998,20 @@ function resolveRange(state, nowFn) {
     if (!state.start || !state.end) {
       throw new CliError("INVALID_ARGS", "Both --start and --end are required");
     }
-    return {
+    return validateRange({
       start: parseBoundary(state.start, { end: false }),
       end: parseBoundary(state.end, { end: true }),
-    };
+    });
   }
 
   if (state.from || state.to) {
     if (!state.from || !state.to) {
       throw new CliError("INVALID_ARGS", "Both --from and --to are required");
     }
-    return {
+    return validateRange({
       start: parseBoundary(state.from, { end: false }),
       end: parseBoundary(state.to, { end: true }),
-    };
+    });
   }
 
   if (state.all) {
@@ -1550,6 +2024,19 @@ function resolveRange(state, nowFn) {
   return resolveShortcutRange(state.positional, nowFn);
 }
 
+function validateRange(range) {
+  validateStartBeforeEnd(range.start, range.end);
+  return range;
+}
+
+function validateStartBeforeEnd(start, end) {
+  const startMs = Date.parse(start);
+  const endMs = Date.parse(end);
+  if (Number.isNaN(startMs) || Number.isNaN(endMs) || startMs >= endMs) {
+    throw new CliError("INVALID_ARGS", "end must be after start");
+  }
+}
+
 function resolveShortcutRange(positional, nowFn) {
   const now = new Date(nowFn());
   const mode = positional[0] || "w";
@@ -1558,6 +2045,40 @@ function resolveShortcutRange(positional, nowFn) {
     return {
       start: "2000-01-01T00:00:00.000Z",
       end: "2100-01-01T00:00:00.000Z",
+    };
+  }
+
+  if (mode === "today" || mode === "td") {
+    const start = startOfUtcDay(now);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, 1).toISOString(),
+    };
+  }
+
+  if (mode === "tomorrow" || mode === "tm") {
+    const start = addDays(startOfUtcDay(now), 1);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, 1).toISOString(),
+    };
+  }
+
+  if (mode === "next") {
+    const days = Number(positional[1]);
+    if (!Number.isInteger(days) || days < 1 || days > 366) {
+      throw new CliError("INVALID_ARGS", "next window days must be an integer between 1 and 366");
+    }
+    if (positional[2] && positional[2] !== "day" && positional[2] !== "days") {
+      throw new CliError("INVALID_ARGS", "next window only accepts an optional 'days' suffix");
+    }
+    if (positional.length > 3) {
+      throw new CliError("INVALID_ARGS", "next window accepts only a day count");
+    }
+    const start = startOfUtcDay(now);
+    return {
+      start: start.toISOString(),
+      end: addDays(start, days).toISOString(),
     };
   }
 
@@ -1687,6 +2208,21 @@ function readToken(env, localConfig) {
 async function readLocalConfig(env) {
   const configPath = env.PC_CONFIG_PATH || DEFAULT_LOCAL_CONFIG_PATH;
 
+  try {
+    const fileStat = await assertSafeSecretFile(configPath, {
+      required: false,
+      createError: (message, details) => new CliError("SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
+    if (!fileStat) {
+      return null;
+    }
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw error;
+    }
+    throw new CliError("CONFIG_ERROR", `Unable to read local config file: ${configPath}`);
+  }
+
   let content;
   try {
     content = await readFile(configPath, "utf8");
@@ -1746,10 +2282,11 @@ async function requestJson(fetchImpl, request) {
   const payload = parseMaybeJson(text);
 
   if (!response.ok) {
+    const requestId = response.headers.get("x-request-id") || payload?.error?.requestId || null;
     throw new CliError(
       payload?.error?.code || "API_ERROR",
       payload?.error?.message || `API request failed (${response.status})`,
-      payload?.error?.details
+      addRequestIdToDetails(payload?.error?.details, requestId)
     );
   }
 
@@ -1771,6 +2308,54 @@ function parseMaybeJson(text) {
   }
 }
 
+function sanitizeUpstreamPayload(payload) {
+  const details = {};
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    details.code = payload.Code;
+  }
+  return details;
+}
+
+function readRetryAfterDetails(response) {
+  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
+  if (!Number.isFinite(retryAfterMs)) {
+    return {};
+  }
+  return {
+    retryAfterMs,
+    retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+  };
+}
+
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) {
+    return Number.NaN;
+  }
+  return Math.max(0, dateMs - nowMs);
+}
+
+function addRequestIdToDetails(details, requestId) {
+  if (!requestId) {
+    return details;
+  }
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return { requestId };
+  }
+  return {
+    ...details,
+    requestId,
+  };
+}
+
 function parseJsonObject(raw, errorMessage) {
   let parsed;
   try {
@@ -1787,15 +2372,21 @@ function parseJsonObject(raw, errorMessage) {
 
 function requireValue(args, index, option) {
   const value = args[index];
-  if (value === undefined || value === null || String(value).trim() === "") {
+  const trimmed = value === undefined || value === null ? "" : String(value).trim();
+  if (trimmed === "") {
     throw new CliError("INVALID_ARGS", `${option} requires a value`);
   }
-  return value;
+  return trimmed;
 }
 
 function writeOutput(stdout, output, payload) {
   if (output === "json") {
     write(stdout, `${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
+
+  if (Array.isArray(payload?.data?.calendars)) {
+    write(stdout, formatCalendarTable(payload.data.calendars));
     return;
   }
 
@@ -1814,13 +2405,27 @@ function writeOutput(stdout, output, payload) {
   write(stdout, `${lines.join("\n")}\n`);
 }
 
+function formatCalendarTable(calendars) {
+  if (calendars.length === 0) {
+    return "No calendars\n";
+  }
+
+  const lines = ["id\tname\tdefault\ttarget\tcolor\tpermissions"];
+  for (const calendar of calendars) {
+    lines.push(
+      `${calendar.id || ""}\t${calendar.name || ""}\t${calendar.default ? "yes" : "no"}\t${calendar.target ? "yes" : "no"}\t${calendar.color || ""}\t${calendar.permissions ?? ""}`
+    );
+  }
+  return `${lines.join("\n")}\n`;
+}
+
 function toCliErrorPayload(error) {
   if (error instanceof CliError) {
     return {
       error: {
         code: error.code,
         message: error.message,
-        details: error.details,
+        details: sanitizeErrorDetails(error.details),
       },
     };
   }
@@ -1832,6 +2437,41 @@ function toCliErrorPayload(error) {
   };
 }
 
+function readCliExitCode(code) {
+  if (VALIDATION_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.VALIDATION_OR_USAGE;
+  }
+  if (AUTH_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.AUTH_OR_SESSION;
+  }
+  if (code === "API_UNREACHABLE") {
+    return CLI_EXIT_CODES.LOCAL_API_UNAVAILABLE;
+  }
+  if (UPSTREAM_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.PROTON_UPSTREAM;
+  }
+  if (UNSUPPORTED_PRIVATE_API_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.UNSUPPORTED_PRIVATE_API_STATE;
+  }
+  return CLI_EXIT_CODES.GENERAL_FAILURE;
+}
+
+function sanitizeErrorDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return details;
+  }
+
+  if (!Object.hasOwn(details, "payload")) {
+    return details;
+  }
+
+  const { payload, ...rest } = details;
+  return {
+    ...rest,
+    ...sanitizeUpstreamPayload(payload),
+  };
+}
+
 function write(stream, text) {
   stream.write(text);
 }
@@ -1840,6 +2480,10 @@ function startOfIsoWeek(date) {
   const utc = new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
   const day = utc.getUTCDay() === 0 ? 7 : utc.getUTCDay();
   return addDays(utc, 1 - day);
+}
+
+function startOfUtcDay(date) {
+  return new Date(Date.UTC(date.getUTCFullYear(), date.getUTCMonth(), date.getUTCDate()));
 }
 
 function isoWeekYear(date) {

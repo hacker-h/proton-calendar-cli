@@ -60,9 +60,11 @@ async function assertPackageMetadata() {
     throw new Error("src/cli.js must start with a node shebang for the npm bin");
   }
 
-  const cliStat = await stat(path.join(repoRoot, "src/cli.js"));
-  if ((cliStat.mode & 0o111) === 0) {
-    throw new Error("src/cli.js must be executable for the npm bin");
+  if (process.platform !== "win32") {
+    const cliStat = await stat(path.join(repoRoot, "src/cli.js"));
+    if ((cliStat.mode & 0o111) === 0) {
+      throw new Error("src/cli.js must be executable for the npm bin");
+    }
   }
 }
 
@@ -126,12 +128,21 @@ async function createNoCredentialNpmEnv() {
 }
 
 async function runNpmJson(args, env) {
-  const { stdout } = await execFileAsync("npm", args, {
+  const { stdout } = await execFileAsync(commandName("npm"), args, {
     cwd: repoRoot,
     env,
     maxBuffer: 1024 * 1024 * 10,
+    shell: process.platform === "win32",
+    windowsHide: true,
   });
   return JSON.parse(stdout);
+}
+
+function commandName(file) {
+  if (process.platform !== "win32" || path.isAbsolute(file) || file.endsWith(".cmd")) {
+    return file;
+  }
+  return `${file}.cmd`;
 }
 
 function assertPackDryRun(result) {

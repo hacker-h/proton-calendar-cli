@@ -1,4 +1,4 @@
-import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { access, mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -15,7 +15,7 @@ try {
   await mkdir(packDir, { recursive: true });
   await mkdir(installDir, { recursive: true });
 
-  const { stdout } = await execFileAsync("pnpm", ["pack", "--pack-destination", packDir], { cwd: repoRoot });
+  const { stdout } = await execFileCrossPlatform("pnpm", ["pack", "--pack-destination", packDir], { cwd: repoRoot });
   const tarballName = stdout
     .split(/\r?\n/)
     .map((line) => line.trim())
@@ -28,47 +28,48 @@ try {
 
   await writeFile(path.join(installDir, "package.json"), '{"private":true,"type":"module"}\n');
   const tarballPath = path.join(packDir, path.basename(tarballName));
-  await assertPackedPackage(tarballPath);
+  await access(tarballPath);
 
-  await execFileAsync("npm", ["install", "--engine-strict", "--ignore-scripts", "--no-audit", "--no-fund", tarballPath], {
+  await execFileCrossPlatform("npm", ["install", "--engine-strict", "--ignore-scripts", "--no-audit", "--no-fund", tarballPath], {
     cwd: installDir,
   });
 
+  await assertInstalledPackageFiles(installDir);
   await assertInstalledPackageMetadata(installDir);
 
-  const binPath = path.join(installDir, "node_modules", ".bin", "pc");
-  const help = await execFileAsync(binPath, ["--help"], { cwd: installDir });
+  const help = await execPackageBin(installDir, ["--help"]);
   if (!help.stdout.includes("pc - Proton Calendar CLI")) {
     throw new Error("Packaged pc binary did not print expected help text");
   }
 
   let lsFailure = null;
   try {
-    await execFileAsync(binPath, ["ls"], { cwd: installDir });
+    await execPackageBin(installDir, ["ls"]);
   } catch (error) {
     lsFailure = error;
   }
   if (!lsFailure) {
     throw new Error("Packaged pc ls unexpectedly succeeded without CLI config");
   }
-  if (lsFailure.code !== 1 || !String(lsFailure.stderr || "").includes('"code": "CONFIG_ERROR"')) {
+  if (lsFailure.code !== 2 || !String(lsFailure.stderr || "").includes('"code": "CONFIG_ERROR"')) {
     throw new Error(`Packaged pc ls did not emit expected config error: ${lsFailure.stderr || lsFailure.message}`);
   }
 } finally {
   await rm(tmpDir, { recursive: true, force: true });
 }
 
-async function assertPackedPackage(tarballPath) {
-  const { stdout } = await execFileAsync("tar", ["-tzf", tarballPath]);
-  const entries = new Set(stdout.split(/\r?\n/).filter(Boolean));
+async function assertInstalledPackageFiles(installDir) {
+  const packageDir = path.join(installDir, "node_modules", "proton-calendar-cli");
   for (const expected of [
-    "package/package.json",
-    "package/src/cli.js",
-    "package/src/index.js",
-    "package/scripts/bootstrap-proton-cookies.mjs",
+    "package.json",
+    path.join("src", "cli.js"),
+    path.join("src", "index.js"),
+    path.join("scripts", "bootstrap-proton-cookies.mjs"),
   ]) {
-    if (!entries.has(expected)) {
-      throw new Error(`Packed package is missing required file: ${expected}`);
+    try {
+      await access(path.join(packageDir, expected));
+    } catch {
+      throw new Error(`Installed package is missing required file: ${expected}`);
     }
   }
 }
@@ -82,4 +83,23 @@ async function assertInstalledPackageMetadata(installDir) {
   if (typeof packageJson.engines?.node !== "string" || !packageJson.engines.node.includes(">=24")) {
     throw new Error("Installed package does not enforce the supported Node engine range");
   }
+}
+
+function execFileCrossPlatform(file, args, options = {}) {
+  return execFileAsync(commandName(file), args, {
+    ...options,
+    shell: process.platform === "win32",
+    windowsHide: true,
+  });
+}
+
+function execPackageBin(installDir, args) {
+  return execFileCrossPlatform("npm", ["exec", "--", "pc", ...args], { cwd: installDir });
+}
+
+function commandName(file) {
+  if (process.platform !== "win32" || path.isAbsolute(file) || file.endsWith(".cmd")) {
+    return file;
+  }
+  return `${file}.cmd`;
 }
