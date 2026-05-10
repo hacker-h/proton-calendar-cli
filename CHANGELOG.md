@@ -1,3 +1,10 @@
+## [1.4.6](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.5...v1.4.6) (2026-05-10)
+
+
+### Bug Fixes
+
+* document and test --start/--end date-only boundary semantics ([#105](https://github.com/hacker-h/proton-calendar-cli/issues/105)) ([71beceb](https://github.com/hacker-h/proton-calendar-cli/commit/71becebf3b4b9e61537aedba5472ec948a0c2a2a)), closes [#40](https://github.com/hacker-h/proton-calendar-cli/issues/40)
+
 ## [1.4.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.4...v1.4.5) (2026-05-10)
 
 
