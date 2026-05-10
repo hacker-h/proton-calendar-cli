@@ -1,6 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
@@ -105,6 +105,79 @@ test("second auth manager waits for shared relogin lock instead of spawning anot
     assert.equal(await secondRecovery, true);
     assert.equal(secondAttempts, 0);
     assert.equal(secondInvalidations, 1);
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("stale relogin lock is removed and recovery proceeds", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "proton-auth-manager-stale-lock-"));
+  try {
+    const bundlePath = path.join(tmpDir, "proton-cookies.json");
+    const lockPath = `${bundlePath}.relogin.lock`;
+    const now = 1_700_000_120_000;
+    let attempts = 0;
+    let invalidations = 0;
+    await writeFile(lockPath, `${JSON.stringify({ pid: 999999, startedAt: 1_700_000_000_000 })}\n`, { mode: 0o600 });
+
+    const manager = new ProtonAuthManager({
+      sessionStore: {
+        getBundlePath() {
+          return bundlePath;
+        },
+        async invalidate() {
+          invalidations += 1;
+        },
+      },
+      enabled: true,
+      mode: "headless",
+      timeoutMs: 100,
+      cooldownMs: 0,
+      lockPollMs: 10,
+      now: () => now,
+      bootstrapRunner: async () => {
+        attempts += 1;
+      },
+    });
+
+    assert.equal(await manager.recover({ reason: "stale-lock" }), true);
+    assert.equal(attempts, 1);
+    assert.equal(invalidations, 1);
+    await assert.rejects(() => stat(lockPath), { code: "ENOENT" });
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
+
+test("fresh malformed relogin lock is not treated as stale", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "proton-auth-manager-fresh-lock-"));
+  try {
+    const bundlePath = path.join(tmpDir, "proton-cookies.json");
+    const lockPath = `${bundlePath}.relogin.lock`;
+    const now = Date.now();
+    let attempts = 0;
+    await writeFile(lockPath, "", { mode: 0o600 });
+
+    const manager = new ProtonAuthManager({
+      sessionStore: {
+        getBundlePath() {
+          return bundlePath;
+        },
+      },
+      enabled: true,
+      mode: "headless",
+      timeoutMs: 20,
+      cooldownMs: 0,
+      lockPollMs: 5,
+      now: () => now,
+      bootstrapRunner: async () => {
+        attempts += 1;
+      },
+    });
+
+    assert.equal(await manager.recover({ reason: "fresh-malformed-lock" }), false);
+    assert.equal(attempts, 0);
+    assert.ok(await stat(lockPath));
   } finally {
     await rm(tmpDir, { recursive: true, force: true });
   }
