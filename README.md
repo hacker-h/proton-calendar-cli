@@ -131,7 +131,7 @@ export TARGET_CALENDAR_ID=cal_123
 
 `TARGET_CALENDAR_ID` hard-locks all requests to one calendar. Without it, `ALLOWED_CALENDAR_IDS` controls explicit calendar routes and `DEFAULT_CALENDAR_ID` is used for plain event commands.
 
-On Proton `401`/`403`, the server tries to refresh auth from saved `REFRESH-*` cookies and persists returned `Set-Cookie` headers back to the cookie bundle.
+On Proton `401`/`403`, the server tries to refresh auth from saved `REFRESH-*` cookies and persists returned `Set-Cookie` headers back to the cookie bundle. Cookie bundle writes use a sidecar lock at `COOKIE_BUNDLE_PATH.lock`, re-read the bundle under that lock, then atomically rename a same-directory temp file into place. This prevents concurrent CI workers from clobbering each other's refreshed cookies and avoids partial JSON at the bundle path after failed writes.
 
 Runtime browser relogin is available but disabled by the generated env file. Enable it only for unattended workers that need recovery beyond cookie refresh:
 
@@ -142,7 +142,7 @@ export PROTON_RELOGIN_COOLDOWN_MS=300000
 export PROTON_RELOGIN_LOCK_PATH=secrets/proton-cookies.json.relogin.lock
 ```
 
-The lock prevents multiple processes from opening Chrome at once; the cooldown avoids repeated failed relogin attempts.
+The relogin lock prevents multiple processes from opening Chrome at once; the cooldown avoids repeated failed relogin attempts. Stale cookie and relogin locks are removed after their grace windows so a crashed worker does not permanently block recovery.
 
 ## Automation Contract
 
