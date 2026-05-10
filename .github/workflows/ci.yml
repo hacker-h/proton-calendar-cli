@@ -57,6 +57,9 @@ jobs:
       - name: Run package/bin smoke
         run: pnpm run smoke:package
 
+      - name: Run npm publish readiness
+        run: pnpm run readiness:npm-publish
+
   live-proton-canary:
     name: Optional live Proton canary
     runs-on: ubuntu-latest
