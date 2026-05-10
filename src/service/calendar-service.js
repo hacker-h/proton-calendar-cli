@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { ApiError, isApiError } from "../errors.js";
 
 const ALLOWED_FIELDS = new Set([
@@ -679,7 +680,11 @@ function generateOccurrences(event, rangeStart, rangeEnd, options = {}) {
   let emitted = 0;
   const maxIterations = readPositiveNumber(options.maxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
 
-  for (const candidate of iterateRecurrenceCandidates(startDate, recurrence)) {
+  const candidates = shouldUseZonedRecurrence(event)
+    ? iterateZonedRecurrenceCandidates(event.start, event.timezone, recurrence)
+    : iterateRecurrenceCandidates(startDate, recurrence);
+
+  for (const candidate of candidates) {
     if (emitted >= countLimit) {
       break;
     }
@@ -807,6 +812,115 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
         const candidate = withUtcTime(new Date(Date.UTC(year, month, day)), time);
         if (candidate >= startDate) {
           yield candidate;
+        }
+      }
+      yearOffset += 1;
+    }
+  }
+}
+
+function* iterateZonedRecurrenceCandidates(startIso, timezone, recurrence) {
+  const start = toZonedDateTime(startIso, timezone);
+  const startInstant = start.toInstant();
+
+  if (recurrence.freq === "DAILY") {
+    let cursor = start;
+    while (true) {
+      yield zonedDateTimeToDate(cursor);
+      cursor = cursor.add({ days: recurrence.interval });
+    }
+  }
+
+  if (recurrence.freq === "WEEKLY") {
+    const weekStart = weekdayToIndex(recurrence.weekStart || "MO");
+    const startWeekday = temporalDayToWeekdayIndex(start.dayOfWeek);
+    const baseWeekStart = start.toPlainDate().subtract({ days: (startWeekday - weekStart + 7) % 7 });
+    const time = pickZonedTime(start);
+    const byDay = recurrence.byDay.length > 0 ? recurrence.byDay : [indexToWeekday(startWeekday)];
+    const dayOffsets = byDay
+      .map((day) => {
+        const idx = weekdayToIndex(day);
+        return (idx - weekStart + 7) % 7;
+      })
+      .sort((a, b) => a - b);
+
+    let weekOffset = 0;
+    while (true) {
+      const thisWeekStart = baseWeekStart.add({ days: weekOffset * recurrence.interval * 7 });
+      for (const offset of dayOffsets) {
+        const candidate = zonedFromPlainDate(thisWeekStart.add({ days: offset }), time, timezone);
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+          continue;
+        }
+        yield zonedDateTimeToDate(candidate);
+      }
+      weekOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "MONTHLY") {
+    const time = pickZonedTime(start);
+    const startMonth = Temporal.PlainDate.from({ year: start.year, month: start.month, day: 1 });
+    let monthOffset = 0;
+
+    while (true) {
+      const monthDate = startMonth.add({ months: monthOffset * recurrence.interval });
+
+      if (recurrence.byDay.length > 0) {
+        const candidates = monthlyByDayCandidatesZoned(
+          monthDate.year,
+          monthDate.month,
+          recurrence.byDay,
+          recurrence.byMonthDay,
+          time,
+          timezone
+        );
+
+        for (const candidate of candidates) {
+          if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+            continue;
+          }
+          yield zonedDateTimeToDate(candidate);
+        }
+
+        monthOffset += 1;
+        continue;
+      }
+
+      const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [start.day];
+      const days = [...byMonthDay].sort((a, b) => a - b);
+      for (const dayOfMonth of days) {
+        if (dayOfMonth > daysInMonthZoned(monthDate.year, monthDate.month)) {
+          continue;
+        }
+
+        const candidate = zonedFromPlainDate(
+          Temporal.PlainDate.from({ year: monthDate.year, month: monthDate.month, day: dayOfMonth }),
+          time,
+          timezone
+        );
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+          continue;
+        }
+        yield zonedDateTimeToDate(candidate);
+      }
+
+      monthOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "YEARLY") {
+    const month = start.month;
+    const day = start.day;
+    const time = pickZonedTime(start);
+
+    let yearOffset = 0;
+    while (true) {
+      const year = start.year + yearOffset * recurrence.interval;
+      if (day <= daysInMonthZoned(year, month)) {
+        const candidate = zonedFromPlainDate(Temporal.PlainDate.from({ year, month, day }), time, timezone);
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) >= 0) {
+          yield zonedDateTimeToDate(candidate);
         }
       }
       yearOffset += 1;
@@ -1188,6 +1302,117 @@ function nthWeekdayOfMonth(year, month, weekday, ordinal) {
   const lastMatchingDay = maxDay - ((lastWeekday - weekdayIndex + 7) % 7);
   const dayOfMonth = lastMatchingDay + (ordinal + 1) * 7;
   return dayOfMonth >= 1 ? new Date(Date.UTC(year, month, dayOfMonth)) : null;
+}
+
+function shouldUseZonedRecurrence(event) {
+  return !event.allDay && isSupportedIanaTimeZone(event.timezone) && !isUtcTimeZone(event.timezone);
+}
+
+function isUtcTimeZone(timezone) {
+  return String(timezone || "").toUpperCase() === "UTC";
+}
+
+function isSupportedIanaTimeZone(timezone) {
+  if (typeof timezone !== "string" || timezone.trim() === "") {
+    return false;
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toZonedDateTime(iso, timezone) {
+  return Temporal.Instant.from(iso).toZonedDateTimeISO(timezone);
+}
+
+function zonedDateTimeToDate(zonedDateTime) {
+  return new Date(zonedDateTime.toInstant().toString());
+}
+
+function pickZonedTime(zonedDateTime) {
+  return {
+    hour: zonedDateTime.hour,
+    minute: zonedDateTime.minute,
+    second: zonedDateTime.second,
+    millisecond: zonedDateTime.millisecond,
+  };
+}
+
+function zonedFromPlainDate(date, time, timezone) {
+  return Temporal.ZonedDateTime.from(
+    {
+      timeZone: timezone,
+      year: date.year,
+      month: date.month,
+      day: date.day,
+      hour: time.hour,
+      minute: time.minute,
+      second: time.second,
+      millisecond: time.millisecond,
+    },
+    { disambiguation: "compatible", overflow: "reject" }
+  );
+}
+
+function temporalDayToWeekdayIndex(dayOfWeek) {
+  return dayOfWeek % 7;
+}
+
+function daysInMonthZoned(year, month) {
+  return Temporal.PlainDate.from({ year, month, day: 1 }).daysInMonth;
+}
+
+function monthlyByDayCandidatesZoned(year, month, byDay, byMonthDay, time, timezone) {
+  const candidates = new Map();
+  const maxDay = daysInMonthZoned(year, month);
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(byMonthDay) : null;
+
+  for (const token of byDay) {
+    const { ordinal, weekday } = parseByDayToken(token);
+    if (ordinal !== null) {
+      const date = nthWeekdayOfMonthZoned(year, month, weekday, ordinal);
+      if (date && (!allowedMonthDays || allowedMonthDays.has(date.day))) {
+        const candidate = zonedFromPlainDate(date, time, timezone);
+        candidates.set(candidate.toInstant().toString(), candidate);
+      }
+      continue;
+    }
+
+    const weekdayIndex = weekdayToIndex(weekday);
+    for (let dayOfMonth = 1; dayOfMonth <= maxDay; dayOfMonth += 1) {
+      if (allowedMonthDays && !allowedMonthDays.has(dayOfMonth)) {
+        continue;
+      }
+      const date = Temporal.PlainDate.from({ year, month, day: dayOfMonth });
+      if (temporalDayToWeekdayIndex(date.dayOfWeek) === weekdayIndex) {
+        const candidate = zonedFromPlainDate(date, time, timezone);
+        candidates.set(candidate.toInstant().toString(), candidate);
+      }
+    }
+  }
+
+  return [...candidates.values()].sort((a, b) => Temporal.Instant.compare(a.toInstant(), b.toInstant()));
+}
+
+function nthWeekdayOfMonthZoned(year, month, weekday, ordinal) {
+  const weekdayIndex = weekdayToIndex(weekday);
+  const maxDay = daysInMonthZoned(year, month);
+
+  if (ordinal > 0) {
+    const firstWeekday = temporalDayToWeekdayIndex(Temporal.PlainDate.from({ year, month, day: 1 }).dayOfWeek);
+    const firstMatchingDay = 1 + ((weekdayIndex - firstWeekday + 7) % 7);
+    const dayOfMonth = firstMatchingDay + (ordinal - 1) * 7;
+    return dayOfMonth <= maxDay ? Temporal.PlainDate.from({ year, month, day: dayOfMonth }) : null;
+  }
+
+  const lastWeekday = temporalDayToWeekdayIndex(Temporal.PlainDate.from({ year, month, day: maxDay }).dayOfWeek);
+  const lastMatchingDay = maxDay - ((lastWeekday - weekdayIndex + 7) % 7);
+  const dayOfMonth = lastMatchingDay + (ordinal + 1) * 7;
+  return dayOfMonth >= 1 ? Temporal.PlainDate.from({ year, month, day: dayOfMonth }) : null;
 }
 
 function startOfWeek(date, weekStartDayIndex) {
