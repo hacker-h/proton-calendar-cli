@@ -781,13 +781,9 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
       }
 
       const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
-      const days = [...byMonthDay].sort((a, b) => a - b);
+      const maxDay = daysInMonthUtc(year, month);
+      const days = effectiveMonthDays(byMonthDay, maxDay);
       for (const dayOfMonth of days) {
-        const maxDay = daysInMonthUtc(year, month);
-        if (dayOfMonth > maxDay) {
-          continue;
-        }
-
         const candidate = withUtcTime(new Date(Date.UTC(year, month, dayOfMonth)), time);
         if (candidate < startDate) {
           continue;
@@ -888,12 +884,8 @@ function* iterateZonedRecurrenceCandidates(startIso, timezone, recurrence) {
       }
 
       const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [start.day];
-      const days = [...byMonthDay].sort((a, b) => a - b);
+      const days = effectiveMonthDays(byMonthDay, daysInMonthZoned(monthDate.year, monthDate.month));
       for (const dayOfMonth of days) {
-        if (dayOfMonth > daysInMonthZoned(monthDate.year, monthDate.month)) {
-          continue;
-        }
-
         const candidate = zonedFromPlainDate(
           Temporal.PlainDate.from({ year: monthDate.year, month: monthDate.month, day: dayOfMonth }),
           time,
@@ -1255,10 +1247,14 @@ function daysInMonthUtc(year, month) {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
 }
 
+function effectiveMonthDays(days, maxDay) {
+  return [...new Set(days.map((day) => Math.min(day, maxDay)))].sort((a, b) => a - b);
+}
+
 function monthlyByDayCandidates(year, month, byDay, byMonthDay, time) {
   const candidates = new Map();
   const maxDay = daysInMonthUtc(year, month);
-  const allowedMonthDays = byMonthDay.length > 0 ? new Set(byMonthDay) : null;
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(effectiveMonthDays(byMonthDay, maxDay)) : null;
 
   for (const token of byDay) {
     const { ordinal, weekday } = parseByDayToken(token);
@@ -1369,7 +1365,7 @@ function daysInMonthZoned(year, month) {
 function monthlyByDayCandidatesZoned(year, month, byDay, byMonthDay, time, timezone) {
   const candidates = new Map();
   const maxDay = daysInMonthZoned(year, month);
-  const allowedMonthDays = byMonthDay.length > 0 ? new Set(byMonthDay) : null;
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(effectiveMonthDays(byMonthDay, maxDay)) : null;
 
   for (const token of byDay) {
     const { ordinal, weekday } = parseByDayToken(token);
