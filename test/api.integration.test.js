@@ -358,6 +358,111 @@ test("supports recurrence and expands instances in list responses", async () => 
   }
 });
 
+test("weekly recurrence preserves Europe/Berlin wall time across DST start", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Berlin weekly standup",
+      start: "2026-03-23T08:00:00.000Z",
+      end: "2026-03-23T08:30:00.000Z",
+      timezone: "Europe/Berlin",
+      recurrence: {
+        freq: "WEEKLY",
+        count: 3,
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-23T00:00:00.000Z&end=2026-04-07T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "Berlin weekly standup")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, [
+      "2026-03-23T08:00:00.000Z",
+      "2026-03-30T07:00:00.000Z",
+      "2026-04-06T07:00:00.000Z",
+    ]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("weekly recurrence preserves America/New_York wall time across DST start", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "New York weekly standup",
+      start: "2026-03-01T14:00:00.000Z",
+      end: "2026-03-01T14:30:00.000Z",
+      timezone: "America/New_York",
+      recurrence: {
+        freq: "WEEKLY",
+        count: 3,
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-01T00:00:00.000Z&end=2026-03-16T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "New York weekly standup")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, [
+      "2026-03-01T14:00:00.000Z",
+      "2026-03-08T13:00:00.000Z",
+      "2026-03-15T13:00:00.000Z",
+    ]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("weekly UTC recurrence keeps existing fixed UTC behavior", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "UTC weekly standup",
+      start: "2026-03-01T14:00:00.000Z",
+      end: "2026-03-01T14:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "WEEKLY",
+        count: 3,
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-01T00:00:00.000Z&end=2026-03-16T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "UTC weekly standup")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, [
+      "2026-03-01T14:00:00.000Z",
+      "2026-03-08T14:00:00.000Z",
+      "2026-03-15T14:00:00.000Z",
+    ]);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports monthly ordinal BYDAY recurrence expansion", async () => {
   const setup = await createFixture();
   try {
