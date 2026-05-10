@@ -1,3 +1,10 @@
+## [1.3.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.3...v1.3.4) (2026-05-10)
+
+
+### Bug Fixes
+
+* preserve zoned recurrence wall time ([c59380c](https://github.com/hacker-h/proton-calendar-cli/commit/c59380c9802ad3ef725253bf9c863ab2f32e2879))
+
 ## [1.3.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.2...v1.3.3) (2026-05-10)
 
 
