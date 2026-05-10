@@ -1,13 +1,14 @@
 #!/usr/bin/env node
 
 import { spawn } from "node:child_process";
-import { chmod, mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
+import { mkdir, mkdtemp, rm } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
 import { getCookies } from "@steipete/sweet-cookie";
 import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
+import { withFileLock, writeSecretFileAtomic } from "../src/atomic-secret-file.js";
 import {
   DEFAULT_PROTON_DOMAINS,
   countAuthCookies,
@@ -97,9 +98,7 @@ async function main() {
           authProbe,
         };
 
-        await mkdir(path.dirname(outputFile), { recursive: true });
-        await writeFile(outputFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-        await chmod(outputFile, 0o600);
+        await withFileLock(outputFile, () => writeSecretFileAtomic(outputFile, `${JSON.stringify(payload, null, 2)}\n`));
 
         console.log("\nLogin detected and cookies exported.");
         console.log(`- Output: ${outputFile}`);
