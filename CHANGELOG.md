@@ -1,3 +1,11 @@
+## [1.4.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.3...v1.4.4) (2026-05-10)
+
+
+### Bug Fixes
+
+* resolve npm command on Windows ([6614a4f](https://github.com/hacker-h/proton-calendar-cli/commit/6614a4f2e2801ed7a258f4e39c87086fcbb4a7d2))
+* skip executable bit check on Windows ([e2b06a7](https://github.com/hacker-h/proton-calendar-cli/commit/e2b06a706a1cfdad68f5c3bdfc78d9b508ea92f7))
+
 ## [1.4.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.2...v1.4.3) (2026-05-10)
 
 
