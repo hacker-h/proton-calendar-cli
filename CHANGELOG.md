@@ -1,3 +1,11 @@
+## [1.4.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.2...v1.4.3) (2026-05-10)
+
+
+### Bug Fixes
+
+* evict Proton caches on session changes ([ec76090](https://github.com/hacker-h/proton-calendar-cli/commit/ec76090296bc4a922c2237700cba40712ebdee0d))
+* track cookie session generations ([920e626](https://github.com/hacker-h/proton-calendar-cli/commit/920e626cb701961d514f193dff45d8e82bc839e0))
+
 ## [1.4.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.1...v1.4.2) (2026-05-10)
 
 
