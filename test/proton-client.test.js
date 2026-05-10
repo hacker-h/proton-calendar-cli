@@ -6,6 +6,7 @@ import {
   buildCreateSyncRequestBody,
   buildSharedParts,
   buildUpdateSyncRequestBody,
+  decryptPersistedSessionKeyPassword,
   ProtonCalendarClient,
   resolveUpdateRecurrence,
 } from "../src/proton/proton-client.js";
@@ -74,6 +75,27 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
   await assert.rejects(
     () => client.authStatus(),
     (error) => error?.code === "AUTH_EXPIRED" && error?.status === 401
+  );
+});
+
+test("persisted session blobs use Proton legacy 16-byte AES-GCM IV", async () => {
+  const keyBytes = Uint8Array.from({ length: 32 }, (_, index) => index + 1);
+  const iv = Uint8Array.from({ length: 16 }, (_, index) => index + 101);
+  const plaintext = new TextEncoder().encode(JSON.stringify({ keyPassword: "calendar-key-password" }));
+  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["encrypt", "decrypt"]);
+  const ciphertext = new Uint8Array(await crypto.subtle.encrypt({ name: "AES-GCM", iv }, cryptoKey, plaintext));
+  const persistedBlob = concatBytes(iv, ciphertext);
+
+  assert.equal(
+    await decryptPersistedSessionKeyPassword({
+      clientKeyBase64: toBase64(keyBytes),
+      persistedBlobBase64: toBase64(persistedBlob),
+    }),
+    "calendar-key-password"
+  );
+  await assert.rejects(
+    () => decryptSessionBlobWithIvBytes(keyBytes, persistedBlob, 12),
+    (error) => error instanceof DOMException || error instanceof Error
   );
 });
 
@@ -678,6 +700,26 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+async function decryptSessionBlobWithIvBytes(keyBytes, blobBytes, ivBytes) {
+  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
+  await crypto.subtle.decrypt({ name: "AES-GCM", iv: blobBytes.slice(0, ivBytes) }, cryptoKey, blobBytes.slice(ivBytes));
+}
+
+function concatBytes(...parts) {
+  const totalLength = parts.reduce((sum, part) => sum + part.length, 0);
+  const merged = new Uint8Array(totalLength);
+  let offset = 0;
+  for (const part of parts) {
+    merged.set(part, offset);
+    offset += part.length;
+  }
+  return merged;
+}
+
+function toBase64(input) {
+  return Buffer.from(input).toString("base64");
 }
 
 async function createMutationClientFixture() {
