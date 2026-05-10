@@ -1,3 +1,13 @@
+## [1.3.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.0...v1.3.1) (2026-05-10)
+
+
+### Bug Fixes
+
+* include request ids in API errors ([64eb19e](https://github.com/hacker-h/proton-calendar-cli/commit/64eb19e30310e469dc16e6bb1ab0c8a1430aabda))
+* pass API request ids through CLI ([78dd017](https://github.com/hacker-h/proton-calendar-cli/commit/78dd0172fe29c6e7883680f05bf994a6024818f2))
+* sanitize upstream API error details ([e8e9949](https://github.com/hacker-h/proton-calendar-cli/commit/e8e99498b3ef5d38be1e5ff94594f27c10acde11))
+* sanitize upstream CLI error details ([0fb83c2](https://github.com/hacker-h/proton-calendar-cli/commit/0fb83c263716fa0a614a2146cb5c1e245d5323c5))
+
 # [1.3.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.2.2...v1.3.0) (2026-05-10)
 
 
