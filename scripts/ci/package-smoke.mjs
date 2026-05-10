@@ -51,7 +51,7 @@ try {
   if (!lsFailure) {
     throw new Error("Packaged pc ls unexpectedly succeeded without CLI config");
   }
-  if (lsFailure.code !== 1 || !String(lsFailure.stderr || "").includes('"code": "CONFIG_ERROR"')) {
+  if (lsFailure.code !== 2 || !String(lsFailure.stderr || "").includes('"code": "CONFIG_ERROR"')) {
     throw new Error(`Packaged pc ls did not emit expected config error: ${lsFailure.stderr || lsFailure.message}`);
   }
 } finally {

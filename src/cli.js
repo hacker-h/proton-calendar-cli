@@ -104,6 +104,46 @@ class CliError extends Error {
   }
 }
 
+const CLI_EXIT_CODES = Object.freeze({
+  GENERAL_FAILURE: 1,
+  VALIDATION_OR_USAGE: 2,
+  AUTH_OR_SESSION: 3,
+  LOCAL_API_UNAVAILABLE: 4,
+  PROTON_UPSTREAM: 5,
+  UNSUPPORTED_PRIVATE_API_STATE: 6,
+});
+
+const VALIDATION_ERROR_CODES = new Set([
+  "CONFIG_ERROR",
+  "EMPTY_PATCH",
+  "INVALID_ARGS",
+  "INVALID_TIMEZONE",
+  "SECRET_FILE_UNSAFE_PERMISSIONS",
+  "UNKNOWN_COMMAND",
+]);
+
+const AUTH_ERROR_CODES = new Set([
+  "AUTH_EXPIRED",
+  "AUTH_RELOGIN_REQUIRED",
+  "LOGIN_FAILED",
+  "UID_MISSING",
+]);
+
+const UPSTREAM_ERROR_CODES = new Set([
+  "EVENT_LIST_PAGE_LIMIT",
+  "PROTON_PERMISSION_DENIED",
+  "PROTON_PLAN_REQUIRED",
+  "RATE_LIMITED",
+  "RECURRENCE_ITERATION_LIMIT",
+  "UPSTREAM_ERROR",
+  "UPSTREAM_EVENT_PAGE_LIMIT",
+  "UPSTREAM_UNREACHABLE",
+]);
+
+const UNSUPPORTED_PRIVATE_API_ERROR_CODES = new Set([
+  "AUTH_CHALLENGE_REQUIRED",
+]);
+
 export async function runPcCli(argv, options = {}) {
   const env = options.env || process.env;
   const fetchImpl = options.fetchImpl || fetch;
@@ -193,7 +233,7 @@ export async function runPcCli(argv, options = {}) {
   } catch (error) {
     const payload = toCliErrorPayload(error);
     write(stderr, `${JSON.stringify(payload, null, 2)}\n`);
-    return 1;
+    return readCliExitCode(payload.error?.code);
   }
 }
 
@@ -2395,6 +2435,25 @@ function toCliErrorPayload(error) {
       message: error?.message || "Internal error",
     },
   };
+}
+
+function readCliExitCode(code) {
+  if (VALIDATION_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.VALIDATION_OR_USAGE;
+  }
+  if (AUTH_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.AUTH_OR_SESSION;
+  }
+  if (code === "API_UNREACHABLE") {
+    return CLI_EXIT_CODES.LOCAL_API_UNAVAILABLE;
+  }
+  if (UPSTREAM_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.PROTON_UPSTREAM;
+  }
+  if (UNSUPPORTED_PRIVATE_API_ERROR_CODES.has(code)) {
+    return CLI_EXIT_CODES.UNSUPPORTED_PRIVATE_API_STATE;
+  }
+  return CLI_EXIT_CODES.GENERAL_FAILURE;
 }
 
 function sanitizeErrorDetails(details) {

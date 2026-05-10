@@ -377,7 +377,7 @@
       "name": "invalid list flags error",
       "argv": ["ls", "--protected", "--unprotected"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -391,7 +391,7 @@
       "name": "unknown command fails before config or API",
       "argv": ["wat"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -405,7 +405,7 @@
       "name": "bad output mode fails before API",
       "argv": ["ls", "-o", "yaml"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -419,7 +419,7 @@
       "name": "reversed list range fails before API",
       "argv": ["ls", "--from", "2026-07-31", "--to", "2026-07-01"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -433,7 +433,7 @@
       "name": "edit missing id fails before API",
       "argv": ["edit"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -447,7 +447,7 @@
       "name": "delete missing id fails before API",
       "argv": ["rm"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -461,7 +461,7 @@
       "name": "invalid mutation scope fails before API",
       "argv": ["rm", "evt-1", "--scope", "nope"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
@@ -496,7 +496,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 3,
         "stdout": "",
         "stderr": {
           "error": {
@@ -523,7 +523,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 4,
         "stdout": "",
         "stderr": {
           "error": {
@@ -561,7 +561,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 5,
         "stdout": "",
         "stderr": {
           "error": {
@@ -569,6 +569,44 @@
             "message": "Unable to reach Proton backend",
             "details": {
               "cause": "network"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unsupported private API state passthrough",
+      "argv": ["ls", "--start", "2026-05-01T00:00:00Z", "--end", "2026-05-02T00:00:00Z"],
+      "apiResponse": {
+        "status": 409,
+        "body": {
+          "error": {
+            "code": "AUTH_CHALLENGE_REQUIRED",
+            "message": "Proton requires interactive verification",
+            "details": {
+              "reason": "captcha"
+            }
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-05-01T00:00:00.000Z",
+          "end": "2026-05-02T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 6,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "AUTH_CHALLENGE_REQUIRED",
+            "message": "Proton requires interactive verification",
+            "details": {
+              "reason": "captcha"
             }
           }
         }
