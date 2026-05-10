@@ -623,6 +623,41 @@ test("recurrence expansion stops when candidate iteration cap is exhausted", asy
   }
 });
 
+test("recurrence expansion succeeds exactly at candidate iteration cap", async () => {
+  const setup = await createFixture({ recurrenceMaxIterations: 3 });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Exactly capped daily series",
+      start: "2026-03-09T09:00:00.000Z",
+      end: "2026-03-09T09:30:00.000Z",
+      timezone: "UTC",
+      recurrence: {
+        freq: "DAILY",
+        count: 3,
+      },
+    });
+    assert.equal(created.status, 201);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-03-20T00:00:00.000Z&limit=50"
+    );
+    assert.equal(listed.status, 200);
+
+    const starts = listed.body.data.events
+      .filter((event) => event.title === "Exactly capped daily series")
+      .map((event) => event.occurrenceStart);
+    assert.deepEqual(starts, [
+      "2026-03-09T09:00:00.000Z",
+      "2026-03-10T09:00:00.000Z",
+      "2026-03-11T09:00:00.000Z",
+    ]);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("near-all-excluded recurrence emits after skipped candidates before cap", async () => {
   const setup = await createFixture({ recurrenceMaxIterations: 6 });
   try {

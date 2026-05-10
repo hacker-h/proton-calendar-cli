@@ -1880,6 +1880,43 @@ test("returns API_UNREACHABLE when API is down", async () => {
   assert.equal(payload.error.code, "API_UNREACHABLE");
 });
 
+test("ls passes through recurrence iteration limit errors", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () =>
+      jsonResponse(422, {
+        error: {
+          code: "RECURRENCE_ITERATION_LIMIT",
+          message: "Recurrence expansion exceeded the candidate iteration limit",
+          requestId: "req-recurrence-cap",
+          details: {
+            maxIterations: 50000,
+          },
+        },
+      }, [["x-request-id", "req-recurrence-cap"]]),
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.value(), "");
+  assert.deepEqual(JSON.parse(stderr.value()), {
+    error: {
+      code: "RECURRENCE_ITERATION_LIMIT",
+      message: "Recurrence expansion exceeded the candidate iteration limit",
+      details: {
+        maxIterations: 50000,
+        requestId: "req-recurrence-cap",
+      },
+    },
+  });
+});
+
 test("CLI error output sanitizes raw upstream payload details", async () => {
   const stderr = createWriter();
   const exitCode = await runPcCli(["ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"], {
