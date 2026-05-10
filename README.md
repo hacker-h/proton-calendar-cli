@@ -187,12 +187,13 @@ Operational defaults:
 ```bash
 pnpm test              # mocked/unit suite
 pnpm run test:unit:junit # mocked/unit suite with reports/junit.xml
-pnpm run ci:local      # unit suite + package/bin smoke
+pnpm run ci:local      # unit suite + package/bin smoke + npm publish readiness
+pnpm run readiness:npm-publish # metadata, package contents, and npm dry-run readiness
 pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
-Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, and the packaged `pc` binary smoke. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package.
+Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
 
 The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, and then runs live tests. Pull requests do not require these secrets or the live canary.
 
@@ -203,13 +204,28 @@ Merge Conventional Commit messages such as `feat: ...`, `fix: ...`, or
 `feat!: ...` to `main` to create the next GitHub release and `v<version>` tag.
 
 semantic-release also updates `CHANGELOG.md` and commits that changelog update
-back to `main` with `[skip ci]`. npm publishing is not enabled; add the npm
-plugin and npm credentials separately if package publishing is needed later.
+back to `main` with `[skip ci]`. npm publishing is not enabled. The release
+workflow only proves npm publish readiness with dry-run commands that strip npm
+credentials and cannot publish from pull-request CI.
+
+Until npm publishing is enabled, semantic-release tags remain the release version
+source and `package.json` is only package metadata for local pack/readiness
+checks. Do not treat `package.json.version` as the published npm version until
+`@semantic-release/npm` is added to the release pipeline.
+
+If npm publishing is enabled later, prefer npm trusted publishing over long-lived
+`NPM_TOKEN` credentials: configure this repository and release workflow as the
+trusted publisher on npmjs.com, add GitHub Actions OIDC permission
+`id-token: write` only to the release publishing job, use a supported npm CLI,
+and then add `@semantic-release/npm` to the semantic-release plugin chain. Trusted
+publishing from GitHub Actions can generate npm provenance for public packages;
+keep PR checks credential-free and dry-run only.
 
 Local release checks:
 
 ```bash
 pnpm run ci:local
+pnpm run readiness:npm-publish
 pnpm run release:dry-run
 ```
 
