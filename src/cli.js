@@ -868,6 +868,10 @@ async function findWorkingUid(input) {
         });
         return { uid, protonBaseUrl };
       } catch (error) {
+        if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+          throw error;
+        }
+
         const refreshed = await attemptLoginRefresh({
           fetchImpl: input.fetchImpl,
           protonHosts: input.protonHosts,
@@ -893,7 +897,10 @@ async function findWorkingUid(input) {
             pathname: "/api/calendar/v1",
           });
           return { uid, protonBaseUrl };
-        } catch {
+        } catch (error) {
+          if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+            throw error;
+          }
           continue;
         }
       }
@@ -917,7 +924,10 @@ async function fetchCalendarsForLogin(input) {
         method: "GET",
         pathname: "/api/calendar/v1",
       });
-    } catch {
+    } catch (error) {
+      if (error instanceof CliError && error.code !== "AUTH_EXPIRED") {
+        throw error;
+      }
       continue;
     }
   }
@@ -1263,6 +1273,14 @@ async function requestProtonJson(fetchImpl, input) {
 
   const text = await response.text();
   const payload = parseMaybeJson(text);
+
+  if (response.status === 429) {
+    throw new CliError("RATE_LIMITED", "Proton rate limit exceeded", {
+      status: 429,
+      retryable: true,
+      ...readRetryAfterDetails(response),
+    });
+  }
 
   if (response.status === 401 || response.status === 403) {
     throw new CliError("AUTH_EXPIRED", "Proton session is unauthorized or expired");
@@ -2207,6 +2225,33 @@ function sanitizeUpstreamPayload(payload) {
     details.code = payload.Code;
   }
   return details;
+}
+
+function readRetryAfterDetails(response) {
+  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
+  if (!Number.isFinite(retryAfterMs)) {
+    return {};
+  }
+  return {
+    retryAfterMs,
+    retryAfterSeconds: Math.ceil(retryAfterMs / 1000),
+  };
+}
+
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) {
+    return Number.NaN;
+  }
+  return Math.max(0, dateMs - nowMs);
 }
 
 function addRequestIdToDetails(details, requestId) {

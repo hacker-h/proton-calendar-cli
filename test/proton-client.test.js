@@ -79,6 +79,230 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
   );
 });
 
+test("rate limited Proton requests respect Retry-After before retrying", async () => {
+  const delays = [];
+  let calendarAttempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      calendarAttempts += 1;
+      if (calendarAttempts === 1) {
+        return jsonResponse(429, { Code: 12087 }, [["Retry-After", "2"]]);
+      }
+      return jsonResponse(200, { Code: 1000, Calendars: [{ ID: "cal-1" }] });
+    },
+    maxRetries: 1,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  const calendars = await client.listCalendars();
+  assert.equal(calendarAttempts, 2);
+  assert.deepEqual(delays, [2000]);
+  assert.deepEqual(calendars.map((calendar) => calendar.id), ["cal-1"]);
+});
+
+test("final rate limited Proton response has stable retry details", async () => {
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(429, { Code: 12087, Error: "rate limited" }, [["Retry-After", "120"]]);
+    },
+    maxRetries: 0,
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.equal(error.status, 429);
+      assert.deepEqual(error.details, {
+        status: 429,
+        retryable: true,
+        retryAfterMs: 120000,
+        retryAfterSeconds: 120,
+      });
+      return true;
+    }
+  );
+});
+
+test("final upstream 503 response remains retryable with Retry-After details", async () => {
+  const delays = [];
+  let attempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      attempts += 1;
+      return jsonResponse(503, { Code: 503 }, [["Retry-After", "120"]]);
+    },
+    maxRetries: 1,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      assert.equal(error.code, "UPSTREAM_ERROR");
+      assert.equal(error.status, 503);
+      assert.deepEqual(error.details, {
+        status: 503,
+        retryable: true,
+        retryAfterMs: 120000,
+        retryAfterSeconds: 120,
+        code: 503,
+      });
+      return true;
+    }
+  );
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [120000]);
+});
+
+test("upstream 503 retries with fallback backoff when Retry-After is absent", async () => {
+  const delays = [];
+  let attempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      attempts += 1;
+      if (attempts === 1) {
+        return jsonResponse(503, { Code: 503 });
+      }
+      return jsonResponse(200, { Code: 1000, Calendars: [{ ID: "cal-1" }] });
+    },
+    maxRetries: 1,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  const calendars = await client.listCalendars();
+  assert.deepEqual(calendars.map((calendar) => calendar.id), ["cal-1"]);
+  assert.equal(attempts, 2);
+  assert.deepEqual(delays, [240]);
+});
+
+test("interactive auth challenges do not trigger relogin", async () => {
+  let reloginAttempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    authManager: {
+      async recover() {
+        reloginAttempts += 1;
+        return true;
+      },
+    },
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(403, { Code: 9002, Error: "Human verification required" });
+    },
+    maxRetries: 0,
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      assert.equal(error.code, "AUTH_CHALLENGE_REQUIRED");
+      assert.equal(error.status, 403);
+      assert.deepEqual(error.details, {
+        status: 403,
+        retryable: false,
+        authState: "captcha",
+      });
+      return true;
+    }
+  );
+  assert.equal(reloginAttempts, 0);
+});
+
+test("invalid refresh and permission auth states are stable and non-retryable", async () => {
+  const cases = [
+    {
+      payload: { Code: 2001, Error: "invalid refresh token" },
+      code: "AUTH_EXPIRED",
+      message: "Proton session cannot be refreshed",
+      authState: "invalid_refresh",
+    },
+    {
+      payload: { Code: 403, Error: "paid plan required" },
+      code: "PROTON_PLAN_REQUIRED",
+      message: "Proton account plan does not allow this operation",
+      authState: "plan_required",
+    },
+    {
+      payload: { Code: 403, Error: "permission denied" },
+      code: "PROTON_PERMISSION_DENIED",
+      message: "Proton denied access to this operation",
+      authState: "permission_denied",
+    },
+  ];
+
+  for (const current of cases) {
+    let reloginAttempts = 0;
+    const client = new ProtonCalendarClient({
+      baseUrl: "https://calendar.proton.me",
+      sessionStore: testSessionStore(),
+      authManager: {
+        async recover() {
+          reloginAttempts += 1;
+          return true;
+        },
+      },
+      fetchImpl: async (url) => {
+        const parsed = new URL(String(url));
+        if (parsed.pathname === "/api/core/v4/users") {
+          return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+        }
+        return jsonResponse(403, current.payload);
+      },
+      maxRetries: 0,
+    });
+
+    await assert.rejects(
+      () => client.listCalendars(),
+      (error) => {
+        assert.equal(error.code, current.code);
+        assert.equal(error.message, current.message);
+        assert.deepEqual(error.details, {
+          status: 403,
+          retryable: false,
+          authState: current.authState,
+        });
+        return true;
+      }
+    );
+    assert.equal(reloginAttempts, 0);
+  }
+});
+
 test("upstream Proton error details exclude raw payload secrets", async () => {
   const client = new ProtonCalendarClient({
     baseUrl: "https://calendar.proton.me",
@@ -768,6 +992,20 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+function testSessionStore() {
+  return {
+    async getUIDCandidates() {
+      return ["uid-123"];
+    },
+    async getCookieHeader() {
+      return "pm-session=valid; pm-auth=valid";
+    },
+    async getPersistedSessions() {
+      return {};
+    },
+  };
 }
 
 async function decryptSessionBlobWithIvBytes(keyBytes, blobBytes, ivBytes) {

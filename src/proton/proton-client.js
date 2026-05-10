@@ -22,6 +22,8 @@ export class ProtonCalendarClient {
     this.fetchImpl = options.fetchImpl || fetch;
     this.timeoutMs = options.timeoutMs || 10000;
     this.maxRetries = options.maxRetries ?? 2;
+    this.delay = options.delay || delay;
+    this.retryAfterMaxMs = options.retryAfterMaxMs;
     this.appVersion = options.appVersion || DEFAULT_PROTON_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
@@ -792,6 +794,28 @@ export class ProtonCalendarClient {
 
         await this.#persistResponseCookies(url, response, `${method}:${pathname}`);
         const payload = await parseResponsePayload(response);
+        const retryDetails = readRetryAfterDetails(response, this.retryAfterMaxMs);
+        const authState = classifyAuthState(response.status, payload);
+
+        if (response.status === 429) {
+          if (!isFinalAttempt) {
+            await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
+            continue;
+          }
+          throw new ApiError(429, "RATE_LIMITED", "Proton rate limit exceeded", {
+            status: 429,
+            retryable: true,
+            ...retryDetails,
+          });
+        }
+
+        if (authState) {
+          throw new ApiError(response.status, authState.code, authState.message, {
+            status: response.status,
+            retryable: false,
+            authState: authState.authState,
+          });
+        }
 
         if (response.status === 401 || response.status === 403) {
           if (options.allowAuthRefresh !== false && !authRefreshAttempted) {
@@ -818,14 +842,16 @@ export class ProtonCalendarClient {
           throw new ApiError(404, "NOT_FOUND", "Resource not found");
         }
 
-        if ((response.status === 429 || response.status >= 500) && !isFinalAttempt) {
-          await delay(backoffMs(attempt));
+        if (response.status >= 500 && !isFinalAttempt) {
+          await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
           continue;
         }
 
         if (!response.ok) {
           throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
             status: response.status,
+            retryable: response.status >= 500 ? true : undefined,
+            ...retryDetails,
             ...sanitizeUpstreamPayload(payload),
           });
         }
@@ -848,7 +874,7 @@ export class ProtonCalendarClient {
           });
         }
 
-        await delay(backoffMs(attempt));
+        await this.delay(backoffMs(attempt));
       }
     }
 
@@ -1650,6 +1676,77 @@ function formatExpiry(value) {
 
 function backoffMs(attempt) {
   return Math.min(1500, 120 * 2 ** attempt);
+}
+
+function readRetryAfterDetails(response, retryAfterMaxMs) {
+  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
+  if (!Number.isFinite(retryAfterMs)) {
+    return {};
+  }
+
+  const maxMs = Number(retryAfterMaxMs);
+  const cappedMs = Number.isFinite(maxMs) && maxMs >= 0 ? Math.min(retryAfterMs, maxMs) : retryAfterMs;
+  return {
+    retryAfterMs: cappedMs,
+    retryAfterSeconds: Math.ceil(cappedMs / 1000),
+  };
+}
+
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) {
+    return Number.NaN;
+  }
+
+  return Math.max(0, dateMs - nowMs);
+}
+
+function classifyAuthState(status, payload) {
+  if (![401, 403].includes(status)) {
+    return null;
+  }
+
+  const text = JSON.stringify(payload || {}).toLowerCase();
+  if (/captcha|human.?verification|verify you are human/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "captcha");
+  }
+  if (/two.?factor|2fa|mfa|one.?time code|security code/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "mfa");
+  }
+  if (/email code|mail code/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "email_code");
+  }
+  if (/locked|disabled/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "account_locked");
+  }
+  if (/invalid.?refresh|refresh.?token|invalid.?grant|session revoked|deauth/.test(text)) {
+    return authState("AUTH_EXPIRED", "Proton session cannot be refreshed", "invalid_refresh");
+  }
+  if (/paid|plan|subscription/.test(text)) {
+    return authState("PROTON_PLAN_REQUIRED", "Proton account plan does not allow this operation", "plan_required");
+  }
+  if (/permission|not allowed|forbidden|access denied/.test(text)) {
+    return authState("PROTON_PERMISSION_DENIED", "Proton denied access to this operation", "permission_denied");
+  }
+  return null;
+}
+
+function authState(code, message, authStateValue) {
+  return {
+    code,
+    message,
+    authState: authStateValue,
+  };
 }
 
 async function parseResponsePayload(response) {
