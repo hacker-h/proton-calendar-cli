@@ -1814,6 +1814,7 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
       error: {
         code: "UPSTREAM_ERROR",
         message: "Upstream request failed",
+        requestId: "request-from-body",
         details: {
           status: 502,
           payload: {
@@ -1825,7 +1826,7 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
           },
         },
       },
-    }),
+    }, [["x-request-id", "request-from-header"]]),
     stdout: createWriter(),
     stderr,
   });
@@ -1834,7 +1835,7 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
   const serialized = stderr.value();
   const payload = JSON.parse(serialized);
   assert.equal(payload.error.code, "UPSTREAM_ERROR");
-  assert.deepEqual(payload.error.details, { status: 502, code: 9001 });
+  assert.deepEqual(payload.error.details, { status: 502, code: 9001, requestId: "request-from-header" });
   assert.equal(serialized.includes("REFRESH-secret"), false);
   assert.equal(serialized.includes("auth-secret"), false);
   assert.equal(serialized.includes("payload"), false);

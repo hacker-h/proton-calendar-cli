@@ -2175,10 +2175,11 @@ async function requestJson(fetchImpl, request) {
   const payload = parseMaybeJson(text);
 
   if (!response.ok) {
+    const requestId = response.headers.get("x-request-id") || payload?.error?.requestId || null;
     throw new CliError(
       payload?.error?.code || "API_ERROR",
       payload?.error?.message || `API request failed (${response.status})`,
-      payload?.error?.details
+      addRequestIdToDetails(payload?.error?.details, requestId)
     );
   }
 
@@ -2206,6 +2207,19 @@ function sanitizeUpstreamPayload(payload) {
     details.code = payload.Code;
   }
   return details;
+}
+
+function addRequestIdToDetails(details, requestId) {
+  if (!requestId) {
+    return details;
+  }
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return { requestId };
+  }
+  return {
+    ...details,
+    requestId,
+  };
 }
 
 function parseJsonObject(raw, errorMessage) {
