@@ -154,11 +154,6 @@ jobs:
         env:
           PROTON_USERNAME: ${{ secrets.PROTON_USERNAME }}
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
+          PROTON_TEST_CALENDAR_ID: ${{ secrets.PROTON_TEST_CALENDAR_ID }}
           COOKIE_BUNDLE_PATH: secrets/proton-cookies.json
-        run: pnpm run bootstrap:cookies:ci
-
-      - name: Run live tests
-        if: steps.live-secrets.outputs.enabled == 'true'
-        env:
-          COOKIE_BUNDLE_PATH: secrets/proton-cookies.json
-        run: pnpm run test:live
+        run: pnpm run ci:live

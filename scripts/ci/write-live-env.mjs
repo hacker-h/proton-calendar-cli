@@ -23,8 +23,9 @@ if (!configuredCalendarId) {
   throw new Error("PROTON_TEST_CALENDAR_ID is required or bootstrap must discover defaultCalendarId");
 }
 
-const apiBearerToken = String(process.env.API_BEARER_TOKEN || "gitlab-live-token").trim();
+const apiBearerToken = String(process.env.API_BEARER_TOKEN || "live-canary-token").trim();
 const protonBaseUrl = String(process.env.PROTON_BASE_URL || "https://calendar.proton.me").trim();
+const apiBaseUrl = String(process.env.PC_API_BASE_URL || "http://127.0.0.1:8787").trim();
 
 const lines = [
   `COOKIE_BUNDLE_PATH=${quote(cookieBundleRelativePath)}`,
@@ -36,6 +37,7 @@ const lines = [
   `PROTON_SECONDARY_CALENDAR_ID=${quote(discoveredSecondaryCalendarId)}`,
   `API_BEARER_TOKEN=${quote(apiBearerToken)}`,
   `PC_API_TOKEN=${quote(apiBearerToken)}`,
+  `PC_API_BASE_URL=${quote(apiBaseUrl)}`,
   `PROTON_BASE_URL=${quote(protonBaseUrl)}`,
   "",
 ];
