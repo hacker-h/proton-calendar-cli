@@ -79,6 +79,103 @@ test("authStatus returns AUTH_EXPIRED when upstream is unauthorized", async () =
   );
 });
 
+test("rate limited Proton requests respect Retry-After before retrying", async () => {
+  const delays = [];
+  let calendarAttempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      calendarAttempts += 1;
+      if (calendarAttempts === 1) {
+        return jsonResponse(429, { Code: 12087 }, [["Retry-After", "2"]]);
+      }
+      return jsonResponse(200, { Code: 1000, Calendars: [{ ID: "cal-1" }] });
+    },
+    maxRetries: 1,
+    delay: async (ms) => {
+      delays.push(ms);
+    },
+  });
+
+  const calendars = await client.listCalendars();
+  assert.equal(calendarAttempts, 2);
+  assert.deepEqual(delays, [2000]);
+  assert.deepEqual(calendars.map((calendar) => calendar.id), ["cal-1"]);
+});
+
+test("final rate limited Proton response has stable retry details", async () => {
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(429, { Code: 12087, Error: "rate limited" }, [["Retry-After", "120"]]);
+    },
+    maxRetries: 0,
+    retryAfterMaxMs: 5000,
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      assert.equal(error.code, "RATE_LIMITED");
+      assert.equal(error.status, 429);
+      assert.deepEqual(error.details, {
+        status: 429,
+        retryable: true,
+        retryAfterMs: 5000,
+        retryAfterSeconds: 5,
+      });
+      return true;
+    }
+  );
+});
+
+test("interactive auth challenges do not trigger relogin", async () => {
+  let reloginAttempts = 0;
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    authManager: {
+      async recover() {
+        reloginAttempts += 1;
+        return true;
+      },
+    },
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(403, { Code: 9002, Error: "Human verification required" });
+    },
+    maxRetries: 0,
+  });
+
+  await assert.rejects(
+    () => client.listCalendars(),
+    (error) => {
+      assert.equal(error.code, "AUTH_CHALLENGE_REQUIRED");
+      assert.equal(error.status, 403);
+      assert.deepEqual(error.details, {
+        status: 403,
+        retryable: false,
+        challenge: "captcha",
+      });
+      return true;
+    }
+  );
+  assert.equal(reloginAttempts, 0);
+});
+
 test("upstream Proton error details exclude raw payload secrets", async () => {
   const client = new ProtonCalendarClient({
     baseUrl: "https://calendar.proton.me",
@@ -768,6 +865,20 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+function testSessionStore() {
+  return {
+    async getUIDCandidates() {
+      return ["uid-123"];
+    },
+    async getCookieHeader() {
+      return "pm-session=valid; pm-auth=valid";
+    },
+    async getPersistedSessions() {
+      return {};
+    },
+  };
 }
 
 async function decryptSessionBlobWithIvBytes(keyBytes, blobBytes, ivBytes) {

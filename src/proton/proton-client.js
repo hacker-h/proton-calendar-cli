@@ -6,6 +6,7 @@ import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
 const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
+const DEFAULT_RETRY_AFTER_MAX_MS = 60000;
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
   INVITE: 2,
@@ -22,6 +23,8 @@ export class ProtonCalendarClient {
     this.fetchImpl = options.fetchImpl || fetch;
     this.timeoutMs = options.timeoutMs || 10000;
     this.maxRetries = options.maxRetries ?? 2;
+    this.delay = options.delay || delay;
+    this.retryAfterMaxMs = options.retryAfterMaxMs ?? DEFAULT_RETRY_AFTER_MAX_MS;
     this.appVersion = options.appVersion || DEFAULT_PROTON_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
@@ -792,6 +795,28 @@ export class ProtonCalendarClient {
 
         await this.#persistResponseCookies(url, response, `${method}:${pathname}`);
         const payload = await parseResponsePayload(response);
+        const retryDetails = readRetryAfterDetails(response, this.retryAfterMaxMs);
+        const challenge = classifyAuthChallenge(response.status, payload);
+
+        if (response.status === 429) {
+          if (!isFinalAttempt) {
+            await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
+            continue;
+          }
+          throw new ApiError(429, "RATE_LIMITED", "Proton rate limit exceeded", {
+            status: 429,
+            retryable: true,
+            ...retryDetails,
+          });
+        }
+
+        if (challenge) {
+          throw new ApiError(response.status, "AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", {
+            status: response.status,
+            retryable: false,
+            challenge,
+          });
+        }
 
         if (response.status === 401 || response.status === 403) {
           if (options.allowAuthRefresh !== false && !authRefreshAttempted) {
@@ -818,14 +843,15 @@ export class ProtonCalendarClient {
           throw new ApiError(404, "NOT_FOUND", "Resource not found");
         }
 
-        if ((response.status === 429 || response.status >= 500) && !isFinalAttempt) {
-          await delay(backoffMs(attempt));
+        if (response.status >= 500 && !isFinalAttempt) {
+          await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
           continue;
         }
 
         if (!response.ok) {
           throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
             status: response.status,
+            ...retryDetails,
             ...sanitizeUpstreamPayload(payload),
           });
         }
@@ -848,7 +874,7 @@ export class ProtonCalendarClient {
           });
         }
 
-        await delay(backoffMs(attempt));
+        await this.delay(backoffMs(attempt));
       }
     }
 
@@ -1650,6 +1676,59 @@ function formatExpiry(value) {
 
 function backoffMs(attempt) {
   return Math.min(1500, 120 * 2 ** attempt);
+}
+
+function readRetryAfterDetails(response, retryAfterMaxMs) {
+  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
+  if (!Number.isFinite(retryAfterMs)) {
+    return {};
+  }
+
+  const cappedMs = Math.min(retryAfterMs, retryAfterMaxMs);
+  return {
+    retryAfterMs: cappedMs,
+    retryAfterSeconds: Math.ceil(cappedMs / 1000),
+  };
+}
+
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) {
+    return Number.NaN;
+  }
+
+  return Math.max(0, dateMs - nowMs);
+}
+
+function classifyAuthChallenge(status, payload) {
+  if (![401, 403].includes(status)) {
+    return null;
+  }
+
+  const text = JSON.stringify(payload || {}).toLowerCase();
+  if (/captcha|human.?verification|verify you are human/.test(text)) {
+    return "captcha";
+  }
+  if (/two.?factor|2fa|mfa|one.?time code|security code/.test(text)) {
+    return "mfa";
+  }
+  if (/email code|mail code/.test(text)) {
+    return "email_code";
+  }
+  if (/locked|disabled/.test(text)) {
+    return "account_locked";
+  }
+  return null;
 }
 
 async function parseResponsePayload(response) {
