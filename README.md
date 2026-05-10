@@ -155,6 +155,8 @@ Automation callers should treat `pc` as a JSON command surface with private-API 
 - Error output goes to stderr as `{ "error": { "code", "message", "details" } }`.
 - `error.code` is the stable key for scripts; `error.message` is for humans.
 - Passwords, cookie values, refresh tokens, session blobs, bearer tokens, and raw Proton payloads must not appear in normal output, logs, or CI artifacts.
+- `RATE_LIMITED` is retryable; respect `error.details.retryAfterSeconds` or `retryAfterMs` before trying again.
+- `AUTH_CHALLENGE_REQUIRED` is not retryable without a human; stop automation for captcha, MFA, account-lock, or human-verification states.
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
 - Run `pc doctor auth --fail-on-relogin-required` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
 - Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
@@ -204,7 +206,7 @@ Operational defaults:
 - Keep date windows small and bounded; do not scan whole calendars on every run.
 - Keep secrets under `secrets/` or CI secret storage and never upload cookie bundles as artifacts.
 - Fail closed when output is not valid JSON or when `error.code` is unknown.
-- For scheduled jobs, add exponential backoff and notify a human after the first auth or private-API drift failure.
+- For scheduled jobs, respect `RATE_LIMITED` retry details before retrying, add exponential backoff for transient upstream failures, and notify a human after the first auth challenge or private-API drift failure.
 - Keep live Proton checks separate from required pull-request CI unless the runner has dedicated credentials and safe cleanup.
 
 ## Development
