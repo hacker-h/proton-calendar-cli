@@ -85,6 +85,7 @@ Supported event fields:
 - `recurrence` with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
 
 For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
+For monthly `byMonthDay`, values past the end of a shorter month fall back to that month's last day, so a `31` rule emits Feb 28/29 and Apr 30 instead of silently skipping those months.
 
 Recurring event scopes are `series`, `single`, and `following`. `single` and `following` require an occurrence start:
 

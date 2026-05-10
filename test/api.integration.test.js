@@ -554,6 +554,91 @@ test("supports monthly ordinal BYDAY recurrence expansion", async () => {
   }
 });
 
+test("monthly byMonthDay falls back to short month endings", async () => {
+  const setup = await createFixture();
+  try {
+    const scenarios = [
+      {
+        title: "Leap year last-day fallback",
+        start: "2024-01-31T09:00:00.000Z",
+        end: "2024-01-31T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: { freq: "MONTHLY", count: 4, byMonthDay: [31] },
+        expectedStarts: [
+          "2024-01-31T09:00:00.000Z",
+          "2024-02-29T09:00:00.000Z",
+          "2024-03-31T09:00:00.000Z",
+          "2024-04-30T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Non-leap year last-day fallback",
+        start: "2026-01-31T09:00:00.000Z",
+        end: "2026-01-31T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: { freq: "MONTHLY", count: 4, byMonthDay: [31] },
+        expectedStarts: [
+          "2026-01-31T09:00:00.000Z",
+          "2026-02-28T09:00:00.000Z",
+          "2026-03-31T09:00:00.000Z",
+          "2026-04-30T09:00:00.000Z",
+        ],
+      },
+      {
+        title: "Zoned last-day fallback",
+        start: "2026-01-31T08:00:00.000Z",
+        end: "2026-01-31T08:30:00.000Z",
+        timezone: "Europe/Berlin",
+        recurrence: { freq: "MONTHLY", count: 4, byMonthDay: [31] },
+        expectedStarts: [
+          "2026-01-31T08:00:00.000Z",
+          "2026-02-28T08:00:00.000Z",
+          "2026-03-31T07:00:00.000Z",
+          "2026-04-30T07:00:00.000Z",
+        ],
+      },
+      {
+        title: "Deduped last-day fallback",
+        start: "2026-02-28T09:00:00.000Z",
+        end: "2026-02-28T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: { freq: "MONTHLY", count: 4, byMonthDay: [30, 31] },
+        expectedStarts: [
+          "2026-02-28T09:00:00.000Z",
+          "2026-03-30T09:00:00.000Z",
+          "2026-03-31T09:00:00.000Z",
+          "2026-04-30T09:00:00.000Z",
+        ],
+      },
+    ];
+
+    for (const scenario of scenarios) {
+      const created = await apiRequest(setup, "POST", "/v1/events", {
+        title: scenario.title,
+        start: scenario.start,
+        end: scenario.end,
+        timezone: scenario.timezone,
+        recurrence: scenario.recurrence,
+      });
+      assert.equal(created.status, 201);
+
+      const listed = await apiRequest(
+        setup,
+        "GET",
+        "/v1/events?start=2024-01-01T00:00:00.000Z&end=2026-05-15T00:00:00.000Z&limit=200"
+      );
+      assert.equal(listed.status, 200);
+
+      const starts = listed.body.data.events
+        .filter((event) => event.title === scenario.title)
+        .map((event) => event.occurrenceStart);
+      assert.deepEqual(starts, scenario.expectedStarts);
+    }
+  } finally {
+    await setup.close();
+  }
+});
+
 test("expands monthly BYDAY from RRULE strings", async () => {
   const service = new CalendarService({
     targetCalendarId: "assistant-calendar",
