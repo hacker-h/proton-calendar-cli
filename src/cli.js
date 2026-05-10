@@ -25,6 +25,7 @@ Usage:
   pc login [options]
   pc logout [options]
   pc doctor auth [options]
+  pc calendars [options]
   pc ls [w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
   pc new <field=value...> [--tz TIMEZONE]
   pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD]
@@ -34,6 +35,7 @@ Examples:
   pc login
   pc logout
   pc doctor auth
+  pc calendars
   pc ls
   pc ls w+
   pc ls m 7 2026
@@ -57,6 +59,7 @@ Environment:
 
 Login options:
   --target-calendar <id>  Use specific calendar ID (default: first available)
+  --default-calendar <id> Use specific default calendar while allowing all discovered calendars
   --timeout <seconds>     Bootstrap login timeout (forwarded)
   --poll <seconds>        Bootstrap polling interval (forwarded)
   --profile-dir <path>    Chrome profile directory (forwarded)
@@ -156,6 +159,12 @@ export async function runPcCli(argv, options = {}) {
       return 0;
     }
 
+    if (apiCommand === "calendars") {
+      const result = await runCalendarsCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
     if (apiCommand === "create") {
       const result = await runCreateCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
@@ -192,6 +201,9 @@ function normalizeApiCommand(command) {
   }
   if (command === "rm" || command === "delete") {
     return "delete";
+  }
+  if (command === "calendars") {
+    return "calendars";
   }
   return null;
 }
@@ -233,7 +245,10 @@ async function runLoginCommand(args, context) {
   });
 
   const calendars = Array.isArray(calendarsPayload?.Calendars) ? calendarsPayload.Calendars : [];
-  const targetCalendarId = selectTargetCalendarId(calendars, parsed.targetCalendarId);
+  const calendarConfig = selectLoginCalendarConfig(calendars, {
+    targetCalendarId: parsed.targetCalendarId,
+    defaultCalendarId: parsed.defaultCalendarId,
+  });
 
   const generateToken = context.generateToken || (() => randomBytes(24).toString("base64url"));
   const apiToken = String(generateToken());
@@ -248,7 +263,7 @@ async function runLoginCommand(args, context) {
 
   await writeServerEnv(parsed.serverEnvPath, {
     apiToken,
-    targetCalendarId,
+    ...calendarConfig,
     cookieBundlePath: parsed.cookieBundlePath,
     protonBaseUrl: parsed.protonBaseUrl,
     apiBaseUrl: parsed.apiBaseUrl,
@@ -260,7 +275,9 @@ async function runLoginCommand(args, context) {
       data: {
         login: "ok",
         uid,
-        targetCalendarId,
+        targetCalendarId: calendarConfig.targetCalendarId,
+        defaultCalendarId: calendarConfig.defaultCalendarId,
+        allowedCalendarIds: calendarConfig.allowedCalendarIds,
         cookieBundlePath: parsed.cookieBundlePath,
         pcConfigPath: parsed.pcConfigPath,
         serverEnvPath: parsed.serverEnvPath,
@@ -380,6 +397,19 @@ async function runDoctorCommand(args, context) {
     payload: {
       data,
     },
+  };
+}
+
+async function runCalendarsCommand(args, context) {
+  const parsed = parseCalendarsArgs(args);
+  return {
+    output: parsed.output,
+    payload: await requestJson(context.fetchImpl, {
+      apiBaseUrl: context.apiBaseUrl,
+      apiToken: context.apiToken,
+      method: "GET",
+      path: "/v1/calendars",
+    }),
   };
 }
 
@@ -541,6 +571,7 @@ function parseLoginArgs(args, env) {
     apiBaseUrl: env.PC_API_BASE_URL || DEFAULT_API_BASE_URL,
     protonBaseUrl: env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
     targetCalendarId: null,
+    defaultCalendarId: null,
     timeout: null,
     poll: null,
     profileDir: null,
@@ -580,6 +611,10 @@ function parseLoginArgs(args, env) {
       state.targetCalendarId = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--default-calendar") {
+      state.defaultCalendarId = requireValue(args, ++i, token);
+      continue;
+    }
     if (token === "--timeout") {
       state.timeout = requireValue(args, ++i, token);
       continue;
@@ -605,6 +640,10 @@ function parseLoginArgs(args, env) {
       continue;
     }
     throw new CliError("INVALID_ARGS", `Unknown login option: ${token}`);
+  }
+
+  if (state.targetCalendarId && state.defaultCalendarId) {
+    throw new CliError("INVALID_ARGS", "Use either --target-calendar or --default-calendar, not both");
   }
 
   const bootstrapArgs = [];
@@ -636,6 +675,7 @@ function parseLoginArgs(args, env) {
     apiBaseUrl: state.apiBaseUrl,
     protonBaseUrl: state.protonBaseUrl,
     targetCalendarId: state.targetCalendarId,
+    defaultCalendarId: state.defaultCalendarId,
     bootstrapArgs,
   };
 }
@@ -676,6 +716,19 @@ function parseLogoutArgs(args, env) {
     pcConfigPath: state.pcConfigPath,
     serverEnvPath: state.serverEnvPath,
   };
+}
+
+function parseCalendarsArgs(args) {
+  const state = { output: "json" };
+  for (let i = 0; i < args.length; i += 1) {
+    const token = args[i];
+    if (token === "-o" || token === "--output") {
+      state.output = requireValue(args, ++i, token);
+      continue;
+    }
+    throw new CliError("INVALID_ARGS", `Unknown calendars option: ${token}`);
+  }
+  return { output: normalizeOutput(state.output) };
 }
 
 async function runBootstrapScript(bootstrapArgs) {
@@ -981,23 +1034,47 @@ function buildProtonHosts(primary) {
   return normalized;
 }
 
-function selectTargetCalendarId(calendars, requestedCalendarId) {
+function selectLoginCalendarConfig(calendars, options) {
   const ids = calendars
     .map((calendar) => (calendar && typeof calendar.ID === "string" ? calendar.ID : ""))
     .filter(Boolean);
 
-  if (requestedCalendarId) {
-    if (ids.length > 0 && !ids.includes(requestedCalendarId)) {
-      throw new CliError("INVALID_ARGS", `Requested calendar not found: ${requestedCalendarId}`);
-    }
-    return requestedCalendarId;
+  if (options.targetCalendarId) {
+    assertKnownCalendarId(ids, options.targetCalendarId);
+    return {
+      targetCalendarId: options.targetCalendarId,
+      defaultCalendarId: null,
+      allowedCalendarIds: [],
+    };
+  }
+
+  if (options.defaultCalendarId) {
+    assertKnownCalendarId(ids, options.defaultCalendarId);
+    return {
+      targetCalendarId: null,
+      defaultCalendarId: options.defaultCalendarId,
+      allowedCalendarIds: ids,
+    };
   }
 
   if (ids.length === 0) {
     throw new CliError("LOGIN_FAILED", "No calendars found for logged-in account");
   }
 
-  return ids[0];
+  return {
+    targetCalendarId: ids[0],
+    defaultCalendarId: null,
+    allowedCalendarIds: [],
+  };
+}
+
+function assertKnownCalendarId(ids, calendarId) {
+  if (ids.length === 0) {
+    throw new CliError("LOGIN_FAILED", "No calendars found for logged-in account");
+  }
+  if (!ids.includes(calendarId)) {
+    throw new CliError("INVALID_ARGS", `Requested calendar not found: ${calendarId}`);
+  }
 }
 
 async function writeJson(filePath, payload) {
@@ -1009,7 +1086,7 @@ async function writeJson(filePath, payload) {
 async function writeServerEnv(filePath, values) {
   const lines = [
     `export API_BEARER_TOKEN=${quoteEnv(values.apiToken)}`,
-    `export TARGET_CALENDAR_ID=${quoteEnv(values.targetCalendarId)}`,
+    ...buildServerCalendarEnv(values),
     `export COOKIE_BUNDLE_PATH=${quoteEnv(values.cookieBundlePath)}`,
     `export PROTON_BASE_URL=${quoteEnv(values.protonBaseUrl)}`,
     `export PC_API_BASE_URL=${quoteEnv(values.apiBaseUrl)}`,
@@ -1029,6 +1106,21 @@ async function writeServerEnv(filePath, values) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, lines.join("\n"), { mode: 0o600 });
   await chmodOwnerOnly(filePath);
+}
+
+function buildServerCalendarEnv(values) {
+  if (values.targetCalendarId) {
+    return [`export TARGET_CALENDAR_ID=${quoteEnv(values.targetCalendarId)}`];
+  }
+
+  return [
+    `export ALLOWED_CALENDAR_IDS=${quoteEnv(formatCsv(values.allowedCalendarIds || []))}`,
+    `export DEFAULT_CALENDAR_ID=${quoteEnv(values.defaultCalendarId || "")}`,
+  ];
+}
+
+function formatCsv(values) {
+  return [...new Set(values)].join(",");
 }
 
 function quoteEnv(value) {
@@ -2033,6 +2125,11 @@ function writeOutput(stdout, output, payload) {
     return;
   }
 
+  if (Array.isArray(payload?.data?.calendars)) {
+    write(stdout, formatCalendarTable(payload.data.calendars));
+    return;
+  }
+
   const events = Array.isArray(payload?.data?.events) ? payload.data.events : [];
   if (events.length === 0) {
     write(stdout, "No events\n");
@@ -2046,6 +2143,20 @@ function writeOutput(stdout, output, payload) {
     );
   }
   write(stdout, `${lines.join("\n")}\n`);
+}
+
+function formatCalendarTable(calendars) {
+  if (calendars.length === 0) {
+    return "No calendars\n";
+  }
+
+  const lines = ["id\tname\tdefault\ttarget\tcolor\tpermissions"];
+  for (const calendar of calendars) {
+    lines.push(
+      `${calendar.id || ""}\t${calendar.name || ""}\t${calendar.default ? "yes" : "no"}\t${calendar.target ? "yes" : "no"}\t${calendar.color || ""}\t${calendar.permissions ?? ""}`
+    );
+  }
+  return `${lines.join("\n")}\n`;
 }
 
 function toCliErrorPayload(error) {
