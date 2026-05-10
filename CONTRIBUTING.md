@@ -23,6 +23,8 @@ Pull requests should not require Proton credentials. Use mocked/unit tests for n
 
 GitLab CI should keep live Proton variables protected and masked, and live jobs should run only on protected runners/branches. Do not publish cookie bundles, generated live env files, browser profiles, or bearer tokens as artifacts; keep artifacts to sanitized reports such as `junit.xml` with a short expiration. If a future pipeline needs cross-job live handoff, add an explicit short-lived handoff with owner review instead of uploading reusable session material.
 
+When a scheduled/manual live canary fails, start with `reports/live-triage.json` or the printed `LIVE_CANARY_FAILED` details. Capture the command, run URL, `failureClass`, affected suite/check, endpoint or feature, sanitized request id/log excerpt, last passing run, owner, expiry, and linked issue. Quarantine is explicit metadata only: entries in `CI_LIVE_QUARANTINE_PATH` must include `id`, `suite`, `check`, `failureClass`, `owner`, `reason`, `expiresAt`, and `issue`, and failures still remain visible until the underlying drift is fixed.
+
 Never commit files from `secrets/`, `.tmp/`, `.sisyphus/`, browser profiles, or raw CI artifacts.
 
 Run `git-crypt unlock` before `pnpm run sync:github-secrets`; the sync script refuses locked `encrypted/local-live.env` files before touching GitHub secrets.
