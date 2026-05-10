@@ -74,12 +74,18 @@ test("parseLiveQuarantine requires owner reason and future expiry", () => {
   ]);
   assert.deepEqual(parsed.invalid[1].missing, ["owner"]);
   assert.equal(JSON.stringify(parsed).includes("API_BEARER_TOKEN"), false);
+  assert.equal(Object.hasOwn(parsed.invalid[2], "id"), false);
 });
 
-test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible", () => {
+test("classifyLiveCanaryFailure maps bootstrap exits, templates triage, and keeps failures visible", () => {
   const uiDrift = classifyLiveCanaryFailure(
     { stage: "bootstrap", exitCode: 60, command: "node scripts/ci/bootstrap-proton-session.mjs" },
     {
+      env: {
+        GITHUB_SERVER_URL: "https://github.com",
+        GITHUB_REPOSITORY: "hacker-h/proton-calendar-cli",
+        GITHUB_RUN_ID: "25620353944",
+      },
       quarantine: {
         active: [
           {
@@ -92,6 +98,16 @@ test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible"
             expiresAt: "2026-05-17T00:00:00.000Z",
             issue: "https://github.com/hacker-h/proton-calendar-cli/issues/22",
           },
+          {
+            id: "api-drift-2026-05",
+            suite: "live-api",
+            check: "pagination",
+            failureClass: "proton_ui_drift",
+            owner: "calendar-maintainers",
+            reason: "Same failure class in a different suite must not match bootstrap",
+            expiresAt: "2026-05-17T00:00:00.000Z",
+            issue: "https://github.com/hacker-h/proton-calendar-cli/issues/22",
+          },
         ],
         invalid: [],
       },
@@ -99,9 +115,24 @@ test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible"
   );
 
   assert.equal(uiDrift.failureClass, "proton_ui_drift");
+  assert.equal(uiDrift.suite, "bootstrap");
+  assert.equal(uiDrift.check, "proton-login");
   assert.equal(uiDrift.quarantineEligible, true);
   assert.equal(uiDrift.quarantineMatches.length, 1);
+  assert.equal(uiDrift.quarantineMatches[0].id, "ui-drift-2026-05");
   assert.equal(uiDrift.failureSuppressed, false);
+  assert.deepEqual(uiDrift.triageTemplate, {
+    command: "node scripts/ci/bootstrap-proton-session.mjs",
+    requestId: null,
+    logExcerpt: null,
+    affectedEndpoint: "n/a",
+    affectedFeature: "proton-login",
+    lastPassingRun: null,
+    runUrl: "https://github.com/hacker-h/proton-calendar-cli/actions/runs/25620353944",
+    owner: "calendar-maintainers",
+    expiresAt: "2026-05-17T00:00:00.000Z",
+    issue: "https://github.com/hacker-h/proton-calendar-cli/issues/22",
+  });
 
   const challenge = classifyLiveCanaryFailure({ stage: "bootstrap", exitCode: 50 });
   assert.equal(challenge.failureClass, "credential_auth_human_required");
@@ -110,6 +141,10 @@ test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible"
 
   const liveTests = classifyLiveCanaryFailure({ stage: "live-tests", exitCode: 1 });
   assert.equal(liveTests.failureClass, "project_regression_or_proton_drift");
+  assert.equal(liveTests.suite, "live-tests");
+  assert.equal(liveTests.check, "test:live");
+  assert.equal(liveTests.triageTemplate.affectedEndpoint, null);
+  assert.equal(liveTests.triageTemplate.lastPassingRun, null);
   assert.equal(liveTests.failureSuppressed, false);
 
   const browserInstall = classifyLiveCanaryFailure({ stage: "browser-install", exitCode: 1, command: "pnpm exec playwright install chromium --with-deps" });

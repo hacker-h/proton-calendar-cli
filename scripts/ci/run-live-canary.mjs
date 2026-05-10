@@ -17,11 +17,11 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       active: [],
       invalid: [{ reason: quarantineError?.message || String(quarantineError) }],
     }));
-    let triage = classifyLiveCanaryFailure(error, { quarantine });
+    let triage = classifyLiveCanaryFailure(error, { env: process.env, quarantine });
     try {
       assertSafeLiveTriage(triage);
     } catch {
-      triage = classifyLiveCanaryFailure({ stage: "triage-sanitizer", exitCode: 80 }, { quarantine: { active: [], invalid: [] } });
+      triage = classifyLiveCanaryFailure({ stage: "triage-sanitizer", exitCode: 80 }, { env: process.env, quarantine: { active: [], invalid: [] } });
     }
     await writeLiveTriageReport(triage, process.env).catch((reportError) => {
       console.error(`Unable to write live triage report: ${reportError?.message || String(reportError)}`);
@@ -72,11 +72,13 @@ export function classifyLiveCanaryFailure(error, options = {}) {
   const bootstrapCode = stage === "bootstrap" ? Number(error?.exitCode) : Number.NaN;
   const mapped = Number.isFinite(bootstrapCode) ? classifyBootstrapExitCode(bootstrapCode) : classifyStage(stage);
   const quarantine = options.quarantine || { active: [], invalid: [] };
-  const quarantineMatches = quarantine.active.filter((entry) => entry.failureClass === mapped.failureClass);
+  const quarantineMatches = quarantine.active.filter((entry) => matchesQuarantine(entry, mapped));
 
   return {
     failureClass: mapped.failureClass,
     stage,
+    suite: mapped.suite,
+    check: mapped.check,
     exitCode: Number.isFinite(Number(error?.exitCode)) ? Number(error.exitCode) : null,
     signal: error?.signal || null,
     command: error?.command || null,
@@ -86,6 +88,18 @@ export function classifyLiveCanaryFailure(error, options = {}) {
     quarantineMatches,
     invalidQuarantines: quarantine.invalid,
     failureSuppressed: false,
+    triageTemplate: {
+      command: error?.command || null,
+      requestId: null,
+      logExcerpt: null,
+      affectedEndpoint: mapped.affectedEndpoint,
+      affectedFeature: mapped.affectedFeature,
+      lastPassingRun: null,
+      runUrl: buildGitHubRunUrl(options.env),
+      owner: quarantineMatches[0]?.owner || null,
+      expiresAt: quarantineMatches[0]?.expiresAt || null,
+      issue: quarantineMatches[0]?.issue || null,
+    },
   };
 }
 
@@ -106,7 +120,7 @@ export function parseLiveQuarantine(raw, now = new Date()) {
     );
     const expiresAtMs = Date.parse(normalized.expiresAt);
     if (!isSafeQuarantineEntry(normalized)) {
-      invalid.push({ id: normalized.id, reason: "unsafe quarantine metadata" });
+      invalid.push({ reason: "unsafe quarantine metadata" });
       continue;
     }
 
@@ -246,37 +260,63 @@ async function writeLiveTriageReport(triage, env) {
 
 function classifyBootstrapExitCode(exitCode) {
   const map = {
-    10: ["credential_config", "Configure PROTON_USERNAME and PROTON_PASSWORD as protected live canary secrets.", false],
-    20: ["runner_browser", "Check Playwright/Chromium installation and runner browser dependencies.", true],
-    30: ["runner_or_proton_availability", "Check runner network and Proton availability before retrying.", true],
-    40: ["credential_auth", "Rotate or repair the dedicated Proton live canary credentials.", false],
-    50: ["credential_auth_human_required", "Human intervention is required; do not loop browser logins.", false],
-    60: ["proton_ui_drift", "Inspect sanitized bootstrap logs and update Proton login selectors if needed.", true],
-    70: ["credential_or_proton_session_drift", "Check session export and Proton calendar auth shape.", true],
-    80: ["security_sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
+    10: ["credential_config", "bootstrap", "proton-login-config", "Configure PROTON_USERNAME and PROTON_PASSWORD as protected live canary secrets.", false],
+    20: ["runner_browser", "bootstrap", "browser-setup", "Check Playwright/Chromium installation and runner browser dependencies.", true],
+    30: ["runner_or_proton_availability", "bootstrap", "proton-login", "Check runner network and Proton availability before retrying.", true],
+    40: ["credential_auth", "bootstrap", "proton-login", "Rotate or repair the dedicated Proton live canary credentials.", false],
+    50: ["credential_auth_human_required", "bootstrap", "proton-login", "Human intervention is required; do not loop browser logins.", false],
+    60: ["proton_ui_drift", "bootstrap", "proton-login", "Inspect sanitized bootstrap logs and update Proton login selectors if needed.", true],
+    70: ["credential_or_proton_session_drift", "bootstrap", "calendar-session", "Check session export and Proton calendar auth shape.", true],
+    80: ["security_sanitizer", "triage", "diagnostic-sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
   };
-  const [failureClass, nextAction, quarantineEligible] = map[exitCode] || [
+  const [failureClass, suite, check, nextAction, quarantineEligible] = map[exitCode] || [
     "unknown_bootstrap_failure",
+    "bootstrap",
+    "unknown",
     "Inspect sanitized bootstrap diagnostics and classify before retrying.",
     true,
   ];
-  return { failureClass, nextAction, quarantineEligible };
+  return buildFailureMapping({ failureClass, suite, check, nextAction, quarantineEligible });
 }
 
 function classifyStage(stage) {
   const map = {
-    "browser-install": ["runner_browser", "Check Playwright/Chromium installation and runner browser dependencies.", true],
-    "write-live-env": ["live_env_setup", "Check live env generation inputs and cookie probe metadata.", false],
-    "triage-sanitizer": ["security_sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
-    "api-start": ["runner_or_api_start", "Check local API startup logs, port availability, and generated live env.", true],
-    "live-tests": ["project_regression_or_proton_drift", "Inspect failing live test, affected endpoint, and last passing run.", true],
+    "browser-install": ["runner_browser", "bootstrap", "browser-setup", "Check Playwright/Chromium installation and runner browser dependencies.", true],
+    "write-live-env": ["live_env_setup", "live-env", "env-generation", "Check live env generation inputs and cookie probe metadata.", false],
+    "triage-sanitizer": ["security_sanitizer", "triage", "diagnostic-sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
+    "api-start": ["runner_or_api_start", "live-api", "api-start", "Check local API startup logs, port availability, and generated live env.", true],
+    "live-tests": ["project_regression_or_proton_drift", "live-tests", "test:live", "Inspect failing live test, affected endpoint, and last passing run.", true],
   };
-  const [failureClass, nextAction, quarantineEligible] = map[stage] || [
+  const [failureClass, suite, check, nextAction, quarantineEligible] = map[stage] || [
     "unknown_live_canary_failure",
+    stage || "unknown",
+    "unknown",
     "Inspect sanitized canary logs and assign a failure class before retrying.",
     true,
   ];
-  return { failureClass, nextAction, quarantineEligible };
+  return buildFailureMapping({ failureClass, suite, check, nextAction, quarantineEligible });
+}
+
+function buildFailureMapping(mapping) {
+  return {
+    ...mapping,
+    affectedEndpoint: mapping.suite === "live-api" || mapping.suite === "live-tests" ? null : "n/a",
+    affectedFeature: mapping.check,
+  };
+}
+
+function matchesQuarantine(entry, mapped) {
+  return entry.failureClass === mapped.failureClass && entry.suite === mapped.suite && entry.check === mapped.check;
+}
+
+function buildGitHubRunUrl(env = {}) {
+  const serverUrl = String(env.GITHUB_SERVER_URL || "").replace(/\/$/, "");
+  const repository = String(env.GITHUB_REPOSITORY || "").trim();
+  const runId = String(env.GITHUB_RUN_ID || "").trim();
+  if (!serverUrl || !repository || !runId) {
+    return null;
+  }
+  return `${serverUrl}/${repository}/actions/runs/${runId}`;
 }
 
 function normalizeQuarantineEntry(entry) {
