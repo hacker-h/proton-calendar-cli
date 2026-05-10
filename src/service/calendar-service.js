@@ -94,6 +94,7 @@ export class CalendarService {
     const limit = readLimit(input.limit);
     const offset = parseCursor(input.cursor);
 
+    // Recurrence expansion needs the complete range before sorting and cursor slicing.
     const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
     const normalized = rawEvents.map(normalizeEvent);
     const filtered = normalized.filter((event) => event.calendarId === calendarId);

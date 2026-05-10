@@ -165,7 +165,7 @@ Automation callers should treat `pc` as a JSON command surface with private-API 
 - Use `--output json` or `-o json` in scripts, even though JSON is the default today.
 - Run `pc doctor auth --fail-on-relogin-required` before unattended jobs so stale cookies, relogin needs, and local API problems fail before mutations.
 - Prefer short date ranges and explicit calendar scope; avoid broad polling loops that repeatedly decode the same private API payloads.
-- Continue API pagination with `nextCursor`; if a list command returns `EVENT_LIST_PAGE_LIMIT` or `UPSTREAM_EVENT_PAGE_LIMIT`, narrow the date range or calendar scope instead of treating the partial window as complete.
+- Continue API pagination with `nextCursor`; it pages the sorted output window but does not reduce peak memory for that request because recurring events are expanded after the full date range is fetched and decoded. If a list command returns `EVENT_LIST_PAGE_LIMIT` or `UPSTREAM_EVENT_PAGE_LIMIT`, narrow the date range or calendar scope instead of treating the partial window as complete.
 - Use `X-Idempotency-Key` for HTTP API mutation retries when available; the CLI does not expose an idempotency flag yet, so retry CLI mutations only after checking whether the event already changed.
 - Back off on auth challenges, rate limits, `Retry-After`, captcha, or human-verification states. Do not loop through repeated browser logins.
 - Treat Proton private API shape drift as expected operational failure. Alert, preserve sanitized logs, and require human triage instead of silently continuing.
@@ -272,6 +272,7 @@ pnpm run release:dry-run
 - Login/bootstrap depends on Chrome and local cookie/session export.
 - Browser login can stop on 2FA, captcha, human-verification, locked-account, or changed-UI states.
 - Rate limits and `Retry-After` behavior are controlled by Proton and should stop automation until backoff expires.
+- List pagination uses `nextCursor` for output continuation only; broad date ranges still fetch, decode, expand recurrences, and sort the whole requested range before slicing the returned page.
 - `recurrence.count` and `recurrence.until` cannot both be set.
 - No attendee invitation flow, RSVP state, reminder controls, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
