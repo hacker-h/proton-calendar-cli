@@ -1,3 +1,10 @@
+## [1.4.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.1...v1.4.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* add stable CLI exit codes ([4e8fd83](https://github.com/hacker-h/proton-calendar-cli/commit/4e8fd83fb45eba15a9af2db8e9e3294090bed917))
+
 ## [1.4.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.0...v1.4.1) (2026-05-10)
 
 
