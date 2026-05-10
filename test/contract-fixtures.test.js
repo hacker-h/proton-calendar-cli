@@ -299,6 +299,15 @@ function normalizeApiBody(body) {
       },
     };
   }
+  if (body?.error?.requestId) {
+    return {
+      ...body,
+      error: {
+        ...body.error,
+        requestId: "<request-id>",
+      },
+    };
+  }
   return body;
 }
 
