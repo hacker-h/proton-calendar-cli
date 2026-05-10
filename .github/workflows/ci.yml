@@ -7,6 +7,11 @@ on:
       - main
       - dev
   workflow_dispatch:
+    inputs:
+      live_quarantine_path:
+        description: Optional checked-in quarantine manifest path for the live Proton canary
+        required: false
+        type: string
   schedule:
     - cron: "17 4 * * 1"
 
@@ -145,10 +150,6 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Chromium for Playwright
-        if: steps.live-secrets.outputs.enabled == 'true'
-        run: pnpm exec playwright install chromium --with-deps
-
       - name: Bootstrap Proton session
         if: steps.live-secrets.outputs.enabled == 'true'
         env:
@@ -156,4 +157,14 @@ jobs:
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
           PROTON_TEST_CALENDAR_ID: ${{ secrets.PROTON_TEST_CALENDAR_ID }}
           COOKIE_BUNDLE_PATH: secrets/proton-cookies.json
+          CI_LIVE_QUARANTINE_PATH: ${{ github.event.inputs.live_quarantine_path || vars.CI_LIVE_QUARANTINE_PATH }}
         run: pnpm run ci:live
+
+      - name: Upload live triage report
+        if: always() && steps.live-secrets.outputs.enabled == 'true'
+        uses: actions/upload-artifact@v4
+        with:
+          name: live-proton-triage
+          path: reports/live-triage.json
+          if-no-files-found: ignore
+          retention-days: 7
