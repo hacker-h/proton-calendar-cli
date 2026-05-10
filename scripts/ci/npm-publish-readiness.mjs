@@ -19,7 +19,7 @@ try {
   await assertNoProjectNpmCredentials();
 
   const env = await createNoCredentialNpmEnv();
-  const pack = await runNpmJson(["pack", "--dry-run", "--json"], env);
+  const pack = await runNpmJson(["pack", "--dry-run", "--json", "--ignore-scripts"], env);
   assertPackDryRun(pack);
 
   const publish = await runNpmJson(["publish", "--dry-run", "--json", "--ignore-scripts", "--access", "public"], env);
