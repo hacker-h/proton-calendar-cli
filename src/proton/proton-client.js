@@ -5,6 +5,7 @@ import { ApiError } from "../errors.js";
 import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
+const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
   INVITE: 2,
@@ -913,7 +914,7 @@ function findPersistedSession(persistedSessions, uid) {
   return null;
 }
 
-async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBlobBase64 }) {
+export async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBlobBase64 }) {
   if (!clientKeyBase64 || !persistedBlobBase64) {
     throw new ApiError(401, "SESSION_BLOB_MISSING", "Missing client key or persisted session blob");
   }
@@ -922,8 +923,11 @@ async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBl
   const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
 
   const blobBytes = fromBase64(persistedBlobBase64);
-  const iv = blobBytes.slice(0, 16);
-  const ciphertext = blobBytes.slice(16);
+  // Proton persisted sessions still use the legacy WebClients sessionBlobCryptoHelper
+  // format: encryptDataWith16ByteIV()/decryptData(..., true). V3 helpers use the
+  // standard 12-byte AES-GCM IV, but persisted `blob` storage does not.
+  const iv = blobBytes.slice(0, LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
+  const ciphertext = blobBytes.slice(LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
 
   let decrypted;
   try {
