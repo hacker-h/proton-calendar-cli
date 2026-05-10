@@ -148,3 +148,37 @@ test("stale relogin lock is removed and recovery proceeds", async () => {
     await rm(tmpDir, { recursive: true, force: true });
   }
 });
+
+test("fresh malformed relogin lock is not treated as stale", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "proton-auth-manager-fresh-lock-"));
+  try {
+    const bundlePath = path.join(tmpDir, "proton-cookies.json");
+    const lockPath = `${bundlePath}.relogin.lock`;
+    const now = Date.now();
+    let attempts = 0;
+    await writeFile(lockPath, "", { mode: 0o600 });
+
+    const manager = new ProtonAuthManager({
+      sessionStore: {
+        getBundlePath() {
+          return bundlePath;
+        },
+      },
+      enabled: true,
+      mode: "headless",
+      timeoutMs: 20,
+      cooldownMs: 0,
+      lockPollMs: 5,
+      now: () => now,
+      bootstrapRunner: async () => {
+        attempts += 1;
+      },
+    });
+
+    assert.equal(await manager.recover({ reason: "fresh-malformed-lock" }), false);
+    assert.equal(attempts, 0);
+    assert.ok(await stat(lockPath));
+  } finally {
+    await rm(tmpDir, { recursive: true, force: true });
+  }
+});
