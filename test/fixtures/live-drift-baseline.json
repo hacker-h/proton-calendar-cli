@@ -1,0 +1,62 @@
+{
+  "surfaces": [
+    {
+      "id": "auth.status",
+      "method": "GET",
+      "endpoint": "/v1/auth/status",
+      "status": 200,
+      "shape": {
+        "type": "object",
+        "keys": {
+          "data": {
+            "type": "object",
+            "keys": {
+              "authenticated": { "type": "boolean" }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "calendars.list",
+      "method": "GET",
+      "endpoint": "/v1/calendars",
+      "status": 200,
+      "shape": {
+        "type": "object",
+        "keys": {
+          "data": {
+            "type": "object",
+            "keys": {
+              "calendars": {
+                "type": "array",
+                "items": { "type": "unknown" }
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "id": "events.list",
+      "method": "GET",
+      "endpoint": "/v1/events",
+      "status": 200,
+      "shape": {
+        "type": "object",
+        "keys": {
+          "data": {
+            "type": "object",
+            "keys": {
+              "events": {
+                "type": "array",
+                "items": { "type": "unknown" }
+              },
+              "nextCursor": { "type": "unknown" }
+            }
+          }
+        }
+      }
+    }
+  ]
+}

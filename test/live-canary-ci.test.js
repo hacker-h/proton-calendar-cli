@@ -5,7 +5,14 @@ import { mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import { classifyLiveCanaryFailure, parseEnvFile, parseLiveQuarantine } from "../scripts/ci/run-live-canary.mjs";
+import {
+  buildDriftShape,
+  buildLiveDriftReport,
+  classifyLiveCanaryFailure,
+  compareLiveDriftSnapshots,
+  parseEnvFile,
+  parseLiveQuarantine,
+} from "../scripts/ci/run-live-canary.mjs";
 
 const execFileAsync = promisify(execFile);
 
@@ -150,6 +157,44 @@ test("classifyLiveCanaryFailure maps bootstrap exits, templates triage, and keep
   const browserInstall = classifyLiveCanaryFailure({ stage: "browser-install", exitCode: 1, command: "pnpm exec playwright install chromium --with-deps" });
   assert.equal(browserInstall.failureClass, "runner_browser");
   assert.equal(browserInstall.quarantineEligible, true);
+
+  const drift = classifyLiveCanaryFailure({ stage: "drift-snapshot", exitCode: 1 });
+  assert.equal(drift.failureClass, "proton_api_drift");
+  assert.equal(drift.suite, "live-drift");
+  assert.equal(drift.check, "schema-snapshot");
+});
+
+test("live drift snapshots compare sanitized response shapes", () => {
+  const baseline = {
+    surfaces: [
+      {
+        id: "events.list",
+        endpoint: "/v1/events",
+        status: 200,
+        shape: buildDriftShape({ data: { events: [], nextCursor: null } }),
+      },
+    ],
+  };
+  const current = {
+    surfaces: [
+      {
+        id: "events.list",
+        endpoint: "/v1/events",
+        status: 200,
+        shape: buildDriftShape({ data: { events: [{ id: "evt-secret-title", title: "Private" }], count: 1 } }),
+      },
+    ],
+  };
+
+  const differences = compareLiveDriftSnapshots(baseline, current);
+  assert.equal(differences.some((difference) => difference.kind === "missing_field" && difference.severity === "breaking"), true);
+  assert.equal(differences.some((difference) => difference.kind === "added_field" && difference.severity === "additive"), true);
+  assert.equal(differences.every((difference) => typeof difference.likelyImpact === "string"), true);
+
+  const serialized = JSON.stringify(buildLiveDriftReport({ baseline, current, env: { GITHUB_SERVER_URL: "https://github.com", GITHUB_REPOSITORY: "hacker-h/proton-calendar-cli", GITHUB_RUN_ID: "1" } }));
+  assert.equal(serialized.includes("evt-secret-title"), false);
+  assert.equal(serialized.includes("Private"), false);
+  assert.equal(serialized.includes("https://github.com/hacker-h/proton-calendar-cli/actions/runs/1"), true);
 });
 
 test("write-live-env creates runnable API and live-test environment", async () => {

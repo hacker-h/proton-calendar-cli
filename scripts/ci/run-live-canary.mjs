@@ -8,6 +8,8 @@ import { assertSafeDiagnostics } from "./bootstrap-proton-session.mjs";
 
 const DEFAULT_ENV_PATH = "secrets/ci-live.env";
 const DEFAULT_TRIAGE_PATH = "reports/live-triage.json";
+const DEFAULT_DRIFT_BASELINE_PATH = "test/fixtures/live-drift-baseline.json";
+const DEFAULT_DRIFT_REPORT_PATH = "reports/live-drift.json";
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
 const DEFAULT_HEALTH_TIMEOUT_MS = 45000;
 
@@ -61,6 +63,7 @@ export async function main(env = process.env) {
 
   try {
     await runStage("api-start", () => waitForApi(apiBaseUrl, readPositiveNumber(liveEnv.CI_LIVE_API_TIMEOUT_MS, DEFAULT_HEALTH_TIMEOUT_MS)));
+    await runStage("drift-snapshot", () => runLiveDriftSnapshot({ apiBaseUrl, env: liveEnv }));
     await runStage("live-tests", () => runCommand(pnpmCommand(), ["run", "test:live"], { env: liveEnv }));
   } finally {
     await stopServer(server);
@@ -159,6 +162,74 @@ export function parseEnvFile(raw) {
   return values;
 }
 
+export function buildDriftShape(value) {
+  if (value === null) {
+    return { type: "null" };
+  }
+  if (Array.isArray(value)) {
+    return {
+      type: "array",
+      items: value.length === 0 ? { type: "unknown" } : buildDriftShape(value[0]),
+    };
+  }
+  if (typeof value === "object") {
+    return {
+      type: "object",
+      keys: Object.fromEntries(
+        Object.keys(value)
+          .sort()
+          .map((key) => [key, buildDriftShape(value[key])])
+      ),
+    };
+  }
+  return { type: typeof value };
+}
+
+export function compareLiveDriftSnapshots(baseline, current) {
+  const differences = [];
+  const expectedSurfaces = new Map((baseline.surfaces || []).map((surface) => [surface.id, surface]));
+  const currentSurfaces = new Map((current.surfaces || []).map((surface) => [surface.id, surface]));
+
+  for (const [id, expected] of expectedSurfaces) {
+    const actual = currentSurfaces.get(id);
+    if (!actual) {
+      differences.push(buildDriftDifference(id, expected.endpoint, "missing_surface", "breaking", "Surface was not captured"));
+      continue;
+    }
+    if (expected.status !== undefined && actual.status !== expected.status) {
+      differences.push(buildDriftDifference(id, expected.endpoint, "status_changed", "breaking", `HTTP status changed from ${expected.status} to ${actual.status}`));
+    }
+    compareShape(expected.shape, actual.shape, { surface: id, endpoint: expected.endpoint, path: "response", differences });
+  }
+
+  for (const [id, actual] of currentSurfaces) {
+    if (!expectedSurfaces.has(id)) {
+      differences.push(buildDriftDifference(id, actual.endpoint, "added_surface", "additive", "New surface was captured"));
+    }
+  }
+
+  return differences;
+}
+
+export function buildLiveDriftReport({ baseline, current, env = {} }) {
+  const differences = compareLiveDriftSnapshots(baseline, current);
+  const breaking = differences.filter((difference) => difference.severity === "breaking");
+  return {
+    failureClass: breaking.length > 0 ? "proton_api_drift" : null,
+    runUrl: buildGitHubRunUrl(env),
+    nextAction: breaking.length > 0
+      ? "Review missing/type drift, update the Proton adapter or refresh the sanitized baseline after confirming compatibility."
+      : "No breaking Proton API drift detected; review additive differences during maintenance.",
+    summary: {
+      surfacesChecked: current.surfaces.length,
+      breakingDifferences: breaking.length,
+      additiveDifferences: differences.length - breaking.length,
+    },
+    differences,
+    current,
+  };
+}
+
 async function waitForApi(apiBaseUrl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -179,6 +250,95 @@ async function waitForApi(apiBaseUrl, timeoutMs) {
   }
 
   throw lastError || new Error("API did not become ready in time");
+}
+
+async function runLiveDriftSnapshot({ apiBaseUrl, env }) {
+  const baselinePath = path.resolve(env.CI_LIVE_DRIFT_BASELINE_PATH || DEFAULT_DRIFT_BASELINE_PATH);
+  const reportPath = path.resolve(env.CI_LIVE_DRIFT_REPORT_PATH || DEFAULT_DRIFT_REPORT_PATH);
+  const baseline = JSON.parse(await readFile(baselinePath, "utf8"));
+  const current = await captureLiveDriftSnapshot({ apiBaseUrl, env });
+  const report = buildLiveDriftReport({ baseline, current, env });
+
+  assertSafeDiagnostics(report);
+  await mkdir(path.dirname(reportPath), { recursive: true });
+  await writeFile(reportPath, `${JSON.stringify({ data: report }, null, 2)}\n`, { mode: 0o600 });
+
+  if (report.summary.breakingDifferences > 0) {
+    throw new LiveDriftError(report);
+  }
+}
+
+async function captureLiveDriftSnapshot({ apiBaseUrl, env }) {
+  const token = String(env.PC_API_TOKEN || env.API_BEARER_TOKEN || "").trim();
+  const start = new Date().toISOString();
+  const end = new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString();
+  const requests = [
+    { id: "auth.status", method: "GET", endpoint: "/v1/auth/status" },
+    { id: "calendars.list", method: "GET", endpoint: "/v1/calendars" },
+    { id: "events.list", method: "GET", endpoint: `/v1/events?start=${encodeURIComponent(start)}&end=${encodeURIComponent(end)}&limit=1` },
+  ];
+
+  return {
+    generatedAt: new Date().toISOString(),
+    surfaces: await Promise.all(requests.map((request) => captureDriftSurface(apiBaseUrl, token, request))),
+  };
+}
+
+async function captureDriftSurface(apiBaseUrl, token, request) {
+  const response = await fetch(`${apiBaseUrl}${request.endpoint}`, {
+    method: request.method,
+    headers: {
+      Accept: "application/json",
+      Authorization: `Bearer ${token}`,
+    },
+  });
+  const payload = await response.json().catch(() => null);
+  return {
+    id: request.id,
+    method: request.method,
+    endpoint: request.endpoint.replace(/\?.*$/, ""),
+    status: response.status,
+    shape: buildDriftShape(payload),
+  };
+}
+
+function compareShape(expected, actual, context) {
+  if (!actual) {
+    context.differences.push(buildDriftDifference(context.surface, context.endpoint, "missing_field", "breaking", `${context.path} is missing`));
+    return;
+  }
+  if (expected.type !== actual.type && expected.type !== "unknown") {
+    context.differences.push(buildDriftDifference(context.surface, context.endpoint, "type_changed", "breaking", `${context.path} changed from ${expected.type} to ${actual.type}`));
+    return;
+  }
+  if (expected.type === "object") {
+    const expectedKeys = expected.keys || {};
+    const actualKeys = actual.keys || {};
+    for (const [key, expectedValue] of Object.entries(expectedKeys)) {
+      compareShape(expectedValue, actualKeys[key], { ...context, path: `${context.path}.${key}` });
+    }
+    for (const key of Object.keys(actualKeys)) {
+      if (!Object.hasOwn(expectedKeys, key)) {
+        context.differences.push(buildDriftDifference(context.surface, context.endpoint, "added_field", "additive", `${context.path}.${key} was added`));
+      }
+    }
+  }
+  if (expected.type === "array") {
+    compareShape(expected.items, actual.items, { ...context, path: `${context.path}[]` });
+  }
+}
+
+function buildDriftDifference(surface, endpoint, kind, severity, message) {
+  return {
+    surface,
+    endpoint,
+    kind,
+    severity,
+    message,
+    likelyImpact: severity === "breaking"
+      ? "Automation may fail or misinterpret Proton API responses until the adapter or baseline is reviewed."
+      : "New Proton API fields are visible for maintenance review but should not break existing automation.",
+  };
 }
 
 function runCommand(command, args, options) {
@@ -285,6 +445,7 @@ function classifyStage(stage) {
     "write-live-env": ["live_env_setup", "live-env", "env-generation", "Check live env generation inputs and cookie probe metadata.", false],
     "triage-sanitizer": ["security_sanitizer", "triage", "diagnostic-sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
     "api-start": ["runner_or_api_start", "live-api", "api-start", "Check local API startup logs, port availability, and generated live env.", true],
+    "drift-snapshot": ["proton_api_drift", "live-drift", "schema-snapshot", "Inspect reports/live-drift.json, confirm Proton API compatibility, then update code or the sanitized baseline.", true],
     "live-tests": ["project_regression_or_proton_drift", "live-tests", "test:live", "Inspect failing live test, affected endpoint, and last passing run.", true],
   };
   const [failureClass, suite, check, nextAction, quarantineEligible] = map[stage] || [
@@ -350,5 +511,13 @@ class LiveCommandError extends Error {
     this.command = `${command} ${args.join(" ")}`;
     this.exitCode = exitCode;
     this.signal = signal || null;
+  }
+}
+
+class LiveDriftError extends Error {
+  constructor(report) {
+    super("Proton API drift snapshot detected breaking schema differences");
+    this.exitCode = 1;
+    this.driftReport = report;
   }
 }
