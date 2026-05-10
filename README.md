@@ -175,14 +175,14 @@ Exit codes:
 | Code | Meaning |
 | --- | --- |
 | `0` | Success |
-| `1` | Current general failure code |
-| `2` | Reserved for validation or usage failure |
-| `3` | Reserved for auth/session failure |
-| `4` | Reserved for local API unavailable |
-| `5` | Reserved for Proton upstream failure |
-| `6` | Reserved for unsupported private-API state or login challenge |
+| `1` | General or internal failure |
+| `2` | Validation, usage, configuration, or local secret-permission failure |
+| `3` | Auth/session/login failure |
+| `4` | Local API unavailable |
+| `5` | Proton upstream, rate-limit, pagination-cap, or private API drift failure |
+| `6` | Unsupported private-API state or login challenge |
 
-Current commands return `1` for all failures; future behavior should move toward the narrower reserved codes without changing the JSON envelopes.
+The JSON envelope remains the stable machine-readable contract; use `error.code` for exact branching and the process exit code for broad CI/action categories.
 
 
 ## Automation Guardrails

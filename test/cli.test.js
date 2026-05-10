@@ -270,7 +270,7 @@ test("calendars command refuses default changes while target locked", async () =
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
 });
 
@@ -288,7 +288,7 @@ test("login rejects unknown default calendar", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
 });
 
@@ -306,7 +306,7 @@ test("login rejects accounts with no calendars", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 3);
   assert.equal(JSON.parse(stderr.value()).error.code, "LOGIN_FAILED");
 });
 
@@ -330,7 +330,7 @@ test("login surfaces Proton rate limits with Retry-After details", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 5);
   assert.deepEqual(JSON.parse(stderr.value()), {
     error: {
       code: "RATE_LIMITED",
@@ -651,7 +651,7 @@ test("doctor auth can fail CI when browser relogin is required", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 3);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "AUTH_RELOGIN_REQUIRED");
   assert.equal(payload.error.details.status, "refresh_unavailable");
@@ -704,7 +704,7 @@ test("doctor auth can fail CI after refresh recovery fails", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 3);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "AUTH_RELOGIN_REQUIRED");
   assert.equal(payload.error.details.status, "refresh_failed");
@@ -911,7 +911,7 @@ test("ls next rejects invalid day counts before API calls", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
   assert.equal(payload.error.message, "next window days must be an integer between 1 and 366");
@@ -1002,7 +1002,7 @@ test("ls --protected and --unprotected together throws INVALID_ARGS", async () =
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
 });
@@ -1025,7 +1025,7 @@ test("new rejects whitespace-only title before API call", async () => {
     }
   );
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
   assert.equal(payload.error.message, "title cannot be blank");
@@ -1046,7 +1046,7 @@ test("edit rejects whitespace-only title before API call", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
   assert.equal(payload.error.message, "title cannot be blank");
@@ -1078,7 +1078,7 @@ test("new rejects reversed time range before API call", async () => {
     }
   );
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(apiCalled, false);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
@@ -1105,7 +1105,7 @@ test("edit rejects reversed time range before API call", async () => {
     }
   );
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(apiCalled, false);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
@@ -1214,7 +1214,7 @@ test("ls rejects whitespace-only text filter before API call", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "INVALID_ARGS");
   assert.equal(payload.error.message, "--title requires a value");
@@ -1492,7 +1492,7 @@ test("ls fails when API pagination cap would truncate results", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 5);
   assert.equal(stdout.value(), "");
   assert.equal(requests.length, 100);
   assert.equal(requests[99].searchParams.get("cursor"), "cursor-99");
@@ -1575,7 +1575,7 @@ test("edit fails when no patch fields are provided", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "EMPTY_PATCH");
 });
@@ -1689,7 +1689,7 @@ test("new rejects invalid --tz before API call", async () => {
     }
   );
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(stdout.value(), "");
   assert.equal(apiCalled, false);
 
@@ -1766,7 +1766,7 @@ test("new rejects GMT edge case as non-IANA input", async () => {
     }
   );
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(apiCalled, false);
   assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_TIMEZONE");
 });
@@ -1826,7 +1826,7 @@ test("edit validates timezone flag, assignment, and patch file inputs", async ()
       stderr,
     });
 
-    assert.equal(exitCode, 1);
+    assert.equal(exitCode, 2);
     assert.equal(apiCalled, false);
     assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_TIMEZONE");
   }
@@ -1916,7 +1916,7 @@ test("unsafe local config permissions are rejected before API calls", async (t) 
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 2);
   assert.equal(requests.length, 0);
   assert.equal(JSON.parse(stderr.value()).error.code, "SECRET_FILE_UNSAFE_PERMISSIONS");
 });
@@ -1976,7 +1976,7 @@ test("returns API_UNREACHABLE when API is down", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 4);
   const payload = JSON.parse(stderr.value());
   assert.equal(payload.error.code, "API_UNREACHABLE");
 });
@@ -2004,7 +2004,7 @@ test("ls passes through recurrence iteration limit errors", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 5);
   assert.equal(stdout.value(), "");
   assert.deepEqual(JSON.parse(stderr.value()), {
     error: {
@@ -2046,7 +2046,7 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
     stderr,
   });
 
-  assert.equal(exitCode, 1);
+  assert.equal(exitCode, 5);
   const serialized = stderr.value();
   const payload = JSON.parse(serialized);
   assert.equal(payload.error.code, "UPSTREAM_ERROR");
@@ -2054,6 +2054,26 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
   assert.equal(serialized.includes("REFRESH-secret"), false);
   assert.equal(serialized.includes("auth-secret"), false);
   assert.equal(serialized.includes("payload"), false);
+});
+
+test("unexpected CLI failures keep the general failure exit code", async () => {
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["--help"], {
+    stdout: {
+      write() {
+        throw new Error("stdout closed");
+      },
+    },
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.deepEqual(JSON.parse(stderr.value()), {
+    error: {
+      code: "INTERNAL_ERROR",
+      message: "stdout closed",
+    },
+  });
 });
 
 function createWriter() {

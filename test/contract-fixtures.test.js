@@ -20,6 +20,7 @@ test("CLI golden fixtures lock stdout stderr and exit code contracts", async () 
         env: {
           PC_API_BASE_URL: "http://127.0.0.1:8787",
           PC_API_TOKEN: "test-token",
+          PC_CONFIG_PATH: path.join(os.tmpdir(), "pc-contract-fixtures-no-local-config", "pc-cli.json"),
         },
         now: contract.now ? () => Date.parse(contract.now) : undefined,
         fetchImpl: createCliFetch(contract, requests),
