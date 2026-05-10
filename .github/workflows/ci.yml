@@ -99,6 +99,9 @@ jobs:
       - name: Run package/bin smoke
         run: pnpm run smoke:package
 
+      - name: Run npm publish readiness
+        run: pnpm run readiness:npm-publish
+
   dependency-health:
     name: Scheduled dependency health
     runs-on: ubuntu-latest
