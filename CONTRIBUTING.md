@@ -7,7 +7,7 @@ pnpm install --frozen-lockfile
 pnpm run ci:local
 ```
 
-The local gate starts with `pnpm run check:toolchain`, which verifies the Node engine, the exact `packageManager` pnpm version, and the browser/cookie/crypto dependency metadata used by login automation. Use the pinned pnpm from `package.json`; do not update the lockfile with a different package manager version.
+The local gate starts with `pnpm run check:toolchain`, which verifies the Node engine, the exact `packageManager` pnpm version, and the browser/cookie/crypto dependency metadata used by login automation. It then runs `pnpm run check:static` for ESLint and TypeScript checkJs contract checks. Use the pinned pnpm from `package.json`; do not update the lockfile with a different package manager version.
 
 For dependency maintenance, run:
 

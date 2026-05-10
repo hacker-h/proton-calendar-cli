@@ -218,16 +218,18 @@ Operational defaults:
 ## Development
 
 ```bash
+pnpm run lint          # ESLint static analysis
+pnpm run typecheck     # TypeScript checkJs contract checks
 pnpm test              # mocked/unit suite
 pnpm run test:unit:junit # mocked/unit suite with reports/junit.xml
-pnpm run ci:local      # unit suite + package/bin smoke + npm publish readiness
+pnpm run ci:local      # static checks + unit suite + package/bin smoke + npm publish readiness
 pnpm run readiness:npm-publish # metadata, package contents, and npm dry-run readiness
 pnpm run ci:live       # bootstrap live Proton session, start API, run live tests
 pnpm test:live:api     # requires live Proton env/session
 pnpm test:live:cli     # requires live Proton env/session
 ```
 
-Pull-request CI runs the required no-quota local gate: frozen pnpm install, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
+Pull-request CI runs the required no-quota local gate: frozen pnpm install, static ESLint/checkJs checks, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
 
 The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests do not require these secrets or the live canary.
 
