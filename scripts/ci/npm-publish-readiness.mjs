@@ -58,9 +58,11 @@ async function assertPackageMetadata() {
     throw new Error("src/cli.js must start with a node shebang for the npm bin");
   }
 
-  const cliStat = await stat(path.join(repoRoot, "src/cli.js"));
-  if ((cliStat.mode & 0o111) === 0) {
-    throw new Error("src/cli.js must be executable for the npm bin");
+  if (process.platform !== "win32") {
+    const cliStat = await stat(path.join(repoRoot, "src/cli.js"));
+    if ((cliStat.mode & 0o111) === 0) {
+      throw new Error("src/cli.js must be executable for the npm bin");
+    }
   }
 }
 
