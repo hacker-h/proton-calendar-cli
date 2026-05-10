@@ -1,3 +1,11 @@
+## [1.4.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.4...v1.4.5) (2026-05-10)
+
+
+### Bug Fixes
+
+* accept publishable private false metadata ([eaa90a1](https://github.com/hacker-h/proton-calendar-cli/commit/eaa90a18b592948fb40b604d1168a771462259ce))
+* skip npm pack lifecycle scripts in readiness ([ae0d978](https://github.com/hacker-h/proton-calendar-cli/commit/ae0d978c177fb996415efca5b75b8edddbe849b7))
+
 ## [1.4.4](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.3...v1.4.4) (2026-05-10)
 
 
