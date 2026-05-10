@@ -53,7 +53,7 @@ pc logout
 | `pc logout` | Remove local CLI/server/cookie secret files and relogin sidecars | `pc logout` |
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
 | `pc calendars` | List discovered calendars and configured defaults | `pc calendars -o table` |
-| `pc ls` | List events; defaults to current ISO week | `pc ls w++ --title review` |
+| `pc ls` | List events; defaults to current ISO week | `pc ls next 7 --title review` |
 | `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
 | `pc edit` | PATCH-style update; only provided fields are sent | `pc edit evt-1 title="Updated" --clear description` |
 | `pc rm` | Delete an event or recurring scope | `pc rm evt-1 --scope series` |
@@ -62,6 +62,9 @@ Useful list examples:
 
 ```bash
 pc ls                              # current week
+pc ls today                        # current UTC day
+pc ls tomorrow                     # next UTC day
+pc ls next 7                       # next seven UTC days, starting today
 pc ls w+                           # current and next week
 pc ls w++                          # current and next two weeks
 pc ls m 7 2026                     # month
@@ -70,6 +73,7 @@ pc ls --from 2026-07-01 --to 2026-07-31
 pc ls --protected
 pc ls --unprotected
 pc ls --title review --location "room b"
+pc ls next 7 --title review --protected
 pc ls -o table
 ```
 
@@ -190,7 +194,7 @@ Recommended CI/CD pattern:
 ```bash
 set -euo pipefail
 pc doctor auth -o json --fail-on-relogin-required
-pc ls --from 2026-07-01 --to 2026-07-07 -o json
+pc ls next 7 --title deploy -o json
 pc new title="Deploy window" start=2026-07-02T10:00:00Z end=2026-07-02T10:30:00Z timezone=UTC -o json
 ```
 
