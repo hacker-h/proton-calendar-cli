@@ -694,6 +694,42 @@ test("supports pagination on expanded recurrence instances", async () => {
   }
 });
 
+test("event listing fails when service page cap would truncate results", async () => {
+  const setup = await createFixture();
+  try {
+    let calls = 0;
+    setup.proton.client.listEvents = async () => {
+      calls += 1;
+      return {
+        events: [],
+        nextCursor: `cursor-${calls}`,
+      };
+    };
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-09T00:00:00.000Z&end=2026-04-09T00:00:00.000Z&limit=50"
+    );
+
+    assert.equal(listed.status, 422);
+    assert.equal(listed.body.error.code, "EVENT_LIST_PAGE_LIMIT");
+    assert.deepEqual(listed.body.error.details, {
+      calendarId: "assistant-calendar",
+      range: {
+        start: "2026-03-09T00:00:00.000Z",
+        end: "2026-04-09T00:00:00.000Z",
+      },
+      pageLimit: 50,
+      pageSize: 200,
+      nextCursor: "cursor-50",
+    });
+    assert.equal(calls, 50);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("scope=single updates only one occurrence", async () => {
   const setup = await createFixture();
   try {

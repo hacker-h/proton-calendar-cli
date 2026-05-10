@@ -16,6 +16,8 @@ const MUTATION_SCOPES = new Set(["single", "following", "series"]);
 const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
 const VALID_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
 const DEFAULT_RECURRENCE_MAX_ITERATIONS = 50000;
+const EVENT_FETCH_PAGE_LIMIT = 50;
+const EVENT_FETCH_PAGE_SIZE = 200;
 
 export class CalendarService {
   constructor(options) {
@@ -216,27 +218,33 @@ export class CalendarService {
     let cursor = null;
     let pages = 0;
 
-    while (pages < 50) {
+    while (pages < EVENT_FETCH_PAGE_LIMIT) {
       const response = await this.protonClient.listEvents({
         calendarId,
         start: range.start,
         end: range.end,
-        limit: 200,
+        limit: EVENT_FETCH_PAGE_SIZE,
         cursor,
       });
+      pages += 1;
 
       const events = Array.isArray(response?.events) ? response.events : [];
       rows.push(...events);
 
       const next = response?.nextCursor || null;
       if (!next) {
-        break;
+        return rows;
       }
       cursor = String(next);
-      pages += 1;
     }
 
-    return rows;
+    throw new ApiError(422, "EVENT_LIST_PAGE_LIMIT", "Event listing exceeded the page limit", {
+      calendarId,
+      range,
+      pageLimit: EVENT_FETCH_PAGE_LIMIT,
+      pageSize: EVENT_FETCH_PAGE_SIZE,
+      nextCursor: cursor,
+    });
   }
 
   #resolveCalendarId(calendarId, options = {}) {
