@@ -1,3 +1,12 @@
+## [1.3.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.1...v1.3.2) (2026-05-10)
+
+
+### Bug Fixes
+
+* complete Proton retry state handling ([f8206fb](https://github.com/hacker-h/proton-calendar-cli/commit/f8206fb7f52a1e9be5f44cdf2bc219dbdff22ce0))
+* respect Proton retry-after ([64105e3](https://github.com/hacker-h/proton-calendar-cli/commit/64105e3b51be8308c5afccbf90d8f08e8d01970e))
+* surface login rate limits ([f7311c7](https://github.com/hacker-h/proton-calendar-cli/commit/f7311c7e4d957ba3a2a9fd5ef5d648b82c0fd137))
+
 ## [1.3.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.0...v1.3.1) (2026-05-10)
 
 
