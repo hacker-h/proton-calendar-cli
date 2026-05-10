@@ -18,7 +18,7 @@ export function toErrorPayload(error) {
       error: {
         code: error.code,
         message: error.message,
-        details: error.details,
+        details: sanitizeErrorDetails(error.details),
       },
     };
   }
@@ -29,4 +29,27 @@ export function toErrorPayload(error) {
       message: "Internal server error",
     },
   };
+}
+
+function sanitizeErrorDetails(details) {
+  if (!details || typeof details !== "object" || Array.isArray(details)) {
+    return details;
+  }
+
+  if (!Object.hasOwn(details, "payload")) {
+    return details;
+  }
+
+  const { payload, ...rest } = details;
+  return {
+    ...rest,
+    ...sanitizeUpstreamPayload(payload),
+  };
+}
+
+function sanitizeUpstreamPayload(payload) {
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    return { code: payload.Code };
+  }
+  return {};
 }
