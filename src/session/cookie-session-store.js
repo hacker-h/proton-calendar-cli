@@ -1,15 +1,21 @@
-import { readFile, stat, writeFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
 import path from "node:path";
+import { withFileLock, writeSecretFileAtomic } from "../atomic-secret-file.js";
 import { ApiError } from "../errors.js";
+import { assertSafeSecretFile } from "../secret-file-safety.js";
 
 export class CookieSessionStore {
   constructor(options) {
     this.cookieBundlePath = path.resolve(options.cookieBundlePath);
     this.now = options.now || (() => Date.now());
     this.cachedMtimeMs = -1;
+    this.lockTimeoutMs = options.lockTimeoutMs;
+    this.lockPollMs = options.lockPollMs;
+    this.lockStaleMs = options.lockStaleMs;
     this.cookies = [];
     this.bundle = {};
     this.lastLoadedAt = null;
+    this.generation = 0;
   }
 
   getBundlePath() {
@@ -42,6 +48,11 @@ export class CookieSessionStore {
   async getBundle() {
     await this.#reloadIfNeeded();
     return this.bundle;
+  }
+
+  async getGeneration() {
+    await this.#reloadIfNeeded();
+    return this.generation;
   }
 
   async getUIDCandidates() {
@@ -108,66 +119,78 @@ export class CookieSessionStore {
   }
 
   async applySetCookieHeaders(urlString, setCookieHeaders) {
-    await this.#reloadIfNeeded();
     const requestUrl = new URL(urlString);
     const parsedCookies = parseSetCookieHeaders(setCookieHeaders, requestUrl, this.now());
     if (parsedCookies.length === 0) {
       return [];
     }
 
-    const nowMs = this.now();
-    const map = new Map(this.cookies.map((cookie) => [cookieKey(cookie), cookie]));
-    const changes = [];
+    return await withFileLock(
+      this.cookieBundlePath,
+      async () => {
+        const loaded = await this.#loadFromDisk();
+        const nowMs = this.now();
+        const map = new Map(loaded.cookies.map((cookie) => [cookieKey(cookie), cookie]));
+        const changes = [];
 
-    for (const incoming of parsedCookies) {
-      const key = cookieKey(incoming);
-      const previous = map.get(key);
+        for (const incoming of parsedCookies) {
+          const key = cookieKey(incoming);
+          const previous = map.get(key);
 
-      if ((incoming.expiresAt !== null && incoming.expiresAt <= nowMs) || incoming.value === "") {
-        if (previous) {
-          map.delete(key);
+          if ((incoming.expiresAt !== null && incoming.expiresAt <= nowMs) || incoming.value === "") {
+            if (previous) {
+              map.delete(key);
+              changes.push({
+                action: "removed",
+                name: incoming.name,
+                domain: incoming.domain,
+                path: incoming.path,
+                previousExpiresAt: previous.expiresAt,
+                nextExpiresAt: null,
+              });
+            }
+            continue;
+          }
+
+          map.set(key, incoming);
+          const action = previous ? "updated" : "added";
+          const expiresChanged = !previous || previous.expiresAt !== incoming.expiresAt || previous.value !== incoming.value;
+          if (!expiresChanged && action === "updated") {
+            continue;
+          }
+
           changes.push({
-            action: "removed",
+            action,
             name: incoming.name,
             domain: incoming.domain,
             path: incoming.path,
-            previousExpiresAt: previous.expiresAt,
-            nextExpiresAt: null,
+            previousExpiresAt: previous ? previous.expiresAt : null,
+            nextExpiresAt: incoming.expiresAt,
           });
         }
-        continue;
+
+        if (changes.length === 0) {
+          return [];
+        }
+
+        this.cookies = [...map.values()].sort((a, b) => cookieKey(a).localeCompare(cookieKey(b)));
+        this.bundle = buildUpdatedBundle(loaded.bundle, this.cookies);
+        await writeSecretFileAtomic(this.cookieBundlePath, `${JSON.stringify(this.bundle, null, 2)}\n`);
+
+        const fileStat = await stat(this.cookieBundlePath);
+        this.cachedMtimeMs = fileStat.mtimeMs;
+        this.lastLoadedAt = new Date().toISOString();
+        this.generation += 1;
+
+        return changes;
+      },
+      {
+        timeoutMs: this.lockTimeoutMs,
+        pollMs: this.lockPollMs,
+        staleMs: this.lockStaleMs,
+        now: this.now,
       }
-
-      map.set(key, incoming);
-      const action = previous ? "updated" : "added";
-      const expiresChanged = !previous || previous.expiresAt !== incoming.expiresAt || previous.value !== incoming.value;
-      if (!expiresChanged && action === "updated") {
-        continue;
-      }
-
-      changes.push({
-        action,
-        name: incoming.name,
-        domain: incoming.domain,
-        path: incoming.path,
-        previousExpiresAt: previous ? previous.expiresAt : null,
-        nextExpiresAt: incoming.expiresAt,
-      });
-    }
-
-    if (changes.length === 0) {
-      return [];
-    }
-
-    this.cookies = [...map.values()].sort((a, b) => cookieKey(a).localeCompare(cookieKey(b)));
-    this.bundle = buildUpdatedBundle(this.bundle, this.cookies);
-    await writeFile(this.cookieBundlePath, `${JSON.stringify(this.bundle, null, 2)}\n`, { mode: 0o600 });
-
-    const fileStat = await stat(this.cookieBundlePath);
-    this.cachedMtimeMs = fileStat.mtimeMs;
-    this.lastLoadedAt = new Date().toISOString();
-
-    return changes;
+    );
   }
 
   async invalidate() {
@@ -177,9 +200,23 @@ export class CookieSessionStore {
   }
 
   async #reloadIfNeeded() {
-    let fileStat;
+    const fileStat = await this.#statBundle();
+    if (fileStat.mtimeMs === this.cachedMtimeMs) {
+      return;
+    }
+
+    const loaded = await this.#loadFromDisk(fileStat);
+
+    this.cachedMtimeMs = loaded.fileStat.mtimeMs;
+    this.cookies = loaded.cookies;
+    this.bundle = loaded.bundle;
+    this.lastLoadedAt = new Date().toISOString();
+    this.generation += 1;
+  }
+
+  async #statBundle() {
     try {
-      fileStat = await stat(this.cookieBundlePath);
+      return await stat(this.cookieBundlePath);
     } catch {
       throw new ApiError(
         401,
@@ -187,10 +224,15 @@ export class CookieSessionStore {
         `Cookie bundle not found at ${this.cookieBundlePath}`
       );
     }
+  }
 
-    if (fileStat.mtimeMs === this.cachedMtimeMs) {
-      return;
-    }
+  async #loadFromDisk(fileStat = null) {
+    const currentStat = fileStat || await this.#statBundle();
+
+    await assertSafeSecretFile(this.cookieBundlePath, {
+      fileStat: currentStat,
+      createError: (message, details) => new ApiError(401, "SECRET_FILE_UNSAFE_PERMISSIONS", message, details),
+    });
 
     let raw;
     try {
@@ -211,10 +253,11 @@ export class CookieSessionStore {
       throw new ApiError(401, "COOKIE_BUNDLE_EMPTY", "Cookie bundle does not contain usable cookies");
     }
 
-    this.cachedMtimeMs = fileStat.mtimeMs;
-    this.cookies = cookies;
-    this.bundle = parsed && typeof parsed === "object" ? parsed : {};
-    this.lastLoadedAt = new Date().toISOString();
+    return {
+      fileStat: currentStat,
+      cookies,
+      bundle: parsed && typeof parsed === "object" ? parsed : {},
+    };
   }
 }
 

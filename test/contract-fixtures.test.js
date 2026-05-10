@@ -20,6 +20,7 @@ test("CLI golden fixtures lock stdout stderr and exit code contracts", async () 
         env: {
           PC_API_BASE_URL: "http://127.0.0.1:8787",
           PC_API_TOKEN: "test-token",
+          PC_CONFIG_PATH: path.join(os.tmpdir(), "pc-contract-fixtures-no-local-config", "pc-cli.json"),
         },
         now: contract.now ? () => Date.parse(contract.now) : undefined,
         fetchImpl: createCliFetch(contract, requests),
@@ -40,7 +41,7 @@ test("doctor auth golden fixture locks refresh recovery output", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-contract-doctor-"));
   const cookieBundlePath = path.join(tmpDir, "cookies.json");
 
-  await writeFile(cookieBundlePath, `${JSON.stringify(createDoctorCookieBundle(), null, 2)}\n`);
+  await writeFile(cookieBundlePath, `${JSON.stringify(createDoctorCookieBundle(), null, 2)}\n`, { mode: 0o600 });
 
   const stdout = createWriter();
   const stderr = createWriter();
@@ -295,6 +296,15 @@ function normalizeApiBody(body) {
       ...body,
       data: {
         ...body.data,
+        requestId: "<request-id>",
+      },
+    };
+  }
+  if (body?.error?.requestId) {
+    return {
+      ...body,
+      error: {
+        ...body.error,
         requestId: "<request-id>",
       },
     };

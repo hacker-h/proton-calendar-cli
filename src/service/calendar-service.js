@@ -1,3 +1,4 @@
+import { Temporal } from "@js-temporal/polyfill";
 import { ApiError, isApiError } from "../errors.js";
 
 const ALLOWED_FIELDS = new Set([
@@ -15,6 +16,9 @@ const ALLOWED_FIELDS = new Set([
 const MUTATION_SCOPES = new Set(["single", "following", "series"]);
 const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
 const VALID_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
+const DEFAULT_RECURRENCE_MAX_ITERATIONS = 50000;
+const EVENT_FETCH_PAGE_LIMIT = 50;
+const EVENT_FETCH_PAGE_SIZE = 200;
 
 export class CalendarService {
   constructor(options) {
@@ -30,6 +34,7 @@ export class CalendarService {
 
     this.protonClient = options.protonClient;
     this.sessionStore = options.sessionStore;
+    this.recurrenceMaxIterations = readPositiveNumber(options.recurrenceMaxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
   }
 
   async authStatus() {
@@ -58,6 +63,31 @@ export class CalendarService {
     }
   }
 
+  async listCalendars() {
+    const calendars = (await this.protonClient.listCalendars())
+      .map((calendar) => ({
+        id: String(calendar.id || ""),
+        name: String(calendar.name || calendar.id || ""),
+        color: calendar.color || null,
+        permissions: calendar.permissions ?? null,
+      }))
+      .filter((calendar) => calendar.id)
+      .filter((calendar) => this.allowedCalendarIds.size === 0 || this.allowedCalendarIds.has(calendar.id))
+      .map((calendar) => ({
+        ...calendar,
+        default: calendar.id === this.defaultCalendarId,
+        target: calendar.id === this.targetCalendarId,
+        allowed: true,
+      }));
+
+    return {
+      calendars,
+      targetCalendarId: this.targetCalendarId,
+      defaultCalendarId: this.defaultCalendarId,
+      allowedCalendarIds: [...this.allowedCalendarIds].sort(),
+    };
+  }
+
   async listEvents(input, options = {}) {
     const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
     const range = validateRange(input.start, input.end);
@@ -67,7 +97,9 @@ export class CalendarService {
     const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
     const normalized = rawEvents.map(normalizeEvent);
     const filtered = normalized.filter((event) => event.calendarId === calendarId);
-    const expanded = expandEventsInRange(filtered, range.start, range.end);
+    const expanded = expandEventsInRange(filtered, range.start, range.end, {
+      maxIterations: this.recurrenceMaxIterations,
+    });
 
     expanded.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
     const page = expanded.slice(offset, offset + limit);
@@ -102,7 +134,9 @@ export class CalendarService {
       throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
     }
 
-    const occurrence = materializeOccurrence(event, parsedOccurrence.occurrenceStart);
+    const occurrence = materializeOccurrence(event, parsedOccurrence.occurrenceStart, {
+      maxIterations: this.recurrenceMaxIterations,
+    });
     if (!occurrence) {
       throw new ApiError(404, "NOT_FOUND", "Occurrence not found");
     }
@@ -185,27 +219,33 @@ export class CalendarService {
     let cursor = null;
     let pages = 0;
 
-    while (pages < 50) {
+    while (pages < EVENT_FETCH_PAGE_LIMIT) {
       const response = await this.protonClient.listEvents({
         calendarId,
         start: range.start,
         end: range.end,
-        limit: 200,
+        limit: EVENT_FETCH_PAGE_SIZE,
         cursor,
       });
+      pages += 1;
 
       const events = Array.isArray(response?.events) ? response.events : [];
       rows.push(...events);
 
       const next = response?.nextCursor || null;
       if (!next) {
-        break;
+        return rows;
       }
       cursor = String(next);
-      pages += 1;
     }
 
-    return rows;
+    throw new ApiError(422, "EVENT_LIST_PAGE_LIMIT", "Event listing exceeded the page limit", {
+      calendarId,
+      range,
+      pageLimit: EVENT_FETCH_PAGE_LIMIT,
+      pageSize: EVENT_FETCH_PAGE_SIZE,
+      nextCursor: cursor,
+    });
   }
 
   #resolveCalendarId(calendarId, options = {}) {
@@ -393,12 +433,27 @@ function validateRecurrence(raw) {
   const weekStart = raw.weekStart === undefined || raw.weekStart === null ? null : normalizeWeekday(raw.weekStart, "recurrence.weekStart");
   const exDates = normalizeExDates(raw.exDates);
 
-  if (freq !== "WEEKLY" && byDay.length > 0) {
-    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY frequency");
+  if (freq === "WEEKLY" && byDay.some((day) => parseByDayToken(day).ordinal !== null)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must use plain weekdays for WEEKLY frequency");
+  }
+
+  if (freq === "MONTHLY" && byDay.some((day) => {
+    const { ordinal } = parseByDayToken(day);
+    return ordinal !== null && Math.abs(ordinal) > 5;
+  })) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay monthly ordinals must be between 1 and 5");
+  }
+
+  if (freq !== "WEEKLY" && freq !== "MONTHLY" && byDay.length > 0) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay is only supported for WEEKLY or MONTHLY frequency");
   }
 
   if (freq !== "MONTHLY" && byMonthDay.length > 0) {
     throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byMonthDay is only supported for MONTHLY frequency");
+  }
+
+  if (freq === "MONTHLY" && byDay.length > 0 && byMonthDay.length > 0 && !monthlyByDayCanMatchMonthDay(byDay, byMonthDay)) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay and recurrence.byMonthDay cannot produce any monthly dates");
   }
 
   return {
@@ -507,25 +562,30 @@ function normalizeOccurrenceStart(raw, scope) {
 
 function parseOccurrenceEventId(eventId) {
   const marker = "::";
-  const index = eventId.indexOf(marker);
-  if (index <= 0) {
+  const index = eventId.lastIndexOf(marker);
+  if (index === -1) {
     return null;
   }
 
   const base = eventId.slice(0, index);
   const encodedOccurrence = eventId.slice(index + marker.length);
   if (!base || !encodedOccurrence) {
-    return null;
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
   }
 
   let decoded;
   try {
     decoded = decodeURIComponent(encodedOccurrence);
   } catch {
-    return null;
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
   }
 
-  const occurrenceStart = requireDate(decoded, "occurrenceStart");
+  let occurrenceStart;
+  try {
+    occurrenceStart = requireDate(decoded, "occurrenceStart");
+  } catch {
+    throw new ApiError(400, "INVALID_OCCURRENCE_ID", "Occurrence event id is invalid");
+  }
   return {
     eventId: base,
     occurrenceStart,
@@ -536,9 +596,9 @@ function buildOccurrenceEventId(eventId, occurrenceStart) {
   return `${eventId}::${encodeURIComponent(occurrenceStart)}`;
 }
 
-function materializeOccurrence(seriesEvent, occurrenceStart) {
+function materializeOccurrence(seriesEvent, occurrenceStart, options = {}) {
   const durationMs = Date.parse(seriesEvent.end) - Date.parse(seriesEvent.start);
-  const matches = generateOccurrences(seriesEvent, occurrenceStart, new Date(Date.parse(occurrenceStart) + 1).toISOString());
+  const matches = generateOccurrences(seriesEvent, occurrenceStart, new Date(Date.parse(occurrenceStart) + 1).toISOString(), options);
   if (matches.length === 0) {
     return null;
   }
@@ -555,7 +615,7 @@ function materializeOccurrence(seriesEvent, occurrenceStart) {
   };
 }
 
-function expandEventsInRange(events, rangeStart, rangeEnd) {
+function expandEventsInRange(events, rangeStart, rangeEnd, options = {}) {
   const expanded = [];
   const detachedKeys = new Set();
 
@@ -580,7 +640,7 @@ function expandEventsInRange(events, rangeStart, rangeEnd) {
     }
 
     const durationMs = Date.parse(event.end) - Date.parse(event.start);
-    const starts = generateOccurrences(event, rangeStart, rangeEnd);
+    const starts = generateOccurrences(event, rangeStart, rangeEnd, options);
     for (const start of starts) {
       const detachedKey = buildDetachedKey(event.id, start);
       if (detachedKeys.has(detachedKey)) {
@@ -602,7 +662,7 @@ function expandEventsInRange(events, rangeStart, rangeEnd) {
   return expanded;
 }
 
-function generateOccurrences(event, rangeStart, rangeEnd) {
+function generateOccurrences(event, rangeStart, rangeEnd, options = {}) {
   if (!event.recurrence) {
     return [];
   }
@@ -618,20 +678,30 @@ function generateOccurrences(event, rangeStart, rangeEnd) {
   const results = [];
   let generatedCount = 0;
   let emitted = 0;
-  const maxGenerated = 5000;
+  const maxIterations = readPositiveNumber(options.maxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
 
-  for (const candidate of iterateRecurrenceCandidates(startDate, recurrence)) {
-    if (generatedCount >= maxGenerated || emitted >= countLimit) {
+  const candidates = shouldUseZonedRecurrence(event)
+    ? iterateZonedRecurrenceCandidates(event.start, event.timezone, recurrence)
+    : iterateRecurrenceCandidates(startDate, recurrence);
+
+  for (const candidate of candidates) {
+    if (emitted >= countLimit) {
       break;
+    }
+
+    if (generatedCount >= maxIterations) {
+      throw new ApiError(422, "RECURRENCE_ITERATION_LIMIT", "Recurrence expansion exceeded the candidate iteration limit", {
+        maxIterations,
+      });
     }
 
     const candidateIso = candidate.toISOString();
     const candidateMs = Date.parse(candidateIso);
+    generatedCount += 1;
+
     if (candidateMs > untilMs) {
       break;
     }
-
-    generatedCount += 1;
 
     if (candidateMs >= rangeEndMs) {
       break;
@@ -688,7 +758,6 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
   }
 
   if (recurrence.freq === "MONTHLY") {
-    const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
     const time = pickUtcTime(startDate);
     let monthOffset = 0;
 
@@ -697,13 +766,24 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
       const year = monthDate.getUTCFullYear();
       const month = monthDate.getUTCMonth();
 
-      const days = [...byMonthDay].sort((a, b) => a - b);
-      for (const dayOfMonth of days) {
-        const maxDay = daysInMonthUtc(year, month);
-        if (dayOfMonth > maxDay) {
-          continue;
+      if (recurrence.byDay.length > 0) {
+        const candidates = monthlyByDayCandidates(year, month, recurrence.byDay, recurrence.byMonthDay, time);
+
+        for (const candidate of candidates) {
+          if (candidate < startDate) {
+            continue;
+          }
+          yield candidate;
         }
 
+        monthOffset += 1;
+        continue;
+      }
+
+      const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [startDate.getUTCDate()];
+      const maxDay = daysInMonthUtc(year, month);
+      const days = effectiveMonthDays(byMonthDay, maxDay);
+      for (const dayOfMonth of days) {
         const candidate = withUtcTime(new Date(Date.UTC(year, month, dayOfMonth)), time);
         if (candidate < startDate) {
           continue;
@@ -735,6 +815,111 @@ function* iterateRecurrenceCandidates(startDate, recurrence) {
   }
 }
 
+function* iterateZonedRecurrenceCandidates(startIso, timezone, recurrence) {
+  const start = toZonedDateTime(startIso, timezone);
+  const startInstant = start.toInstant();
+
+  if (recurrence.freq === "DAILY") {
+    let cursor = start;
+    while (true) {
+      yield zonedDateTimeToDate(cursor);
+      cursor = cursor.add({ days: recurrence.interval });
+    }
+  }
+
+  if (recurrence.freq === "WEEKLY") {
+    const weekStart = weekdayToIndex(recurrence.weekStart || "MO");
+    const startWeekday = temporalDayToWeekdayIndex(start.dayOfWeek);
+    const baseWeekStart = start.toPlainDate().subtract({ days: (startWeekday - weekStart + 7) % 7 });
+    const time = pickZonedTime(start);
+    const byDay = recurrence.byDay.length > 0 ? recurrence.byDay : [indexToWeekday(startWeekday)];
+    const dayOffsets = byDay
+      .map((day) => {
+        const idx = weekdayToIndex(day);
+        return (idx - weekStart + 7) % 7;
+      })
+      .sort((a, b) => a - b);
+
+    let weekOffset = 0;
+    while (true) {
+      const thisWeekStart = baseWeekStart.add({ days: weekOffset * recurrence.interval * 7 });
+      for (const offset of dayOffsets) {
+        const candidate = zonedFromPlainDate(thisWeekStart.add({ days: offset }), time, timezone);
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+          continue;
+        }
+        yield zonedDateTimeToDate(candidate);
+      }
+      weekOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "MONTHLY") {
+    const time = pickZonedTime(start);
+    const startMonth = Temporal.PlainDate.from({ year: start.year, month: start.month, day: 1 });
+    let monthOffset = 0;
+
+    while (true) {
+      const monthDate = startMonth.add({ months: monthOffset * recurrence.interval });
+
+      if (recurrence.byDay.length > 0) {
+        const candidates = monthlyByDayCandidatesZoned(
+          monthDate.year,
+          monthDate.month,
+          recurrence.byDay,
+          recurrence.byMonthDay,
+          time,
+          timezone
+        );
+
+        for (const candidate of candidates) {
+          if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+            continue;
+          }
+          yield zonedDateTimeToDate(candidate);
+        }
+
+        monthOffset += 1;
+        continue;
+      }
+
+      const byMonthDay = recurrence.byMonthDay.length > 0 ? recurrence.byMonthDay : [start.day];
+      const days = effectiveMonthDays(byMonthDay, daysInMonthZoned(monthDate.year, monthDate.month));
+      for (const dayOfMonth of days) {
+        const candidate = zonedFromPlainDate(
+          Temporal.PlainDate.from({ year: monthDate.year, month: monthDate.month, day: dayOfMonth }),
+          time,
+          timezone
+        );
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) < 0) {
+          continue;
+        }
+        yield zonedDateTimeToDate(candidate);
+      }
+
+      monthOffset += 1;
+    }
+  }
+
+  if (recurrence.freq === "YEARLY") {
+    const month = start.month;
+    const day = start.day;
+    const time = pickZonedTime(start);
+
+    let yearOffset = 0;
+    while (true) {
+      const year = start.year + yearOffset * recurrence.interval;
+      if (day <= daysInMonthZoned(year, month)) {
+        const candidate = zonedFromPlainDate(Temporal.PlainDate.from({ year, month, day }), time, timezone);
+        if (Temporal.Instant.compare(candidate.toInstant(), startInstant) >= 0) {
+          yield zonedDateTimeToDate(candidate);
+        }
+      }
+      yearOffset += 1;
+    }
+  }
+}
+
 function buildDetachedKey(seriesId, occurrenceStart) {
   return `${seriesId}::${occurrenceStart}`;
 }
@@ -745,7 +930,8 @@ function parseRRule(rrule) {
   }
 
   const parts = {};
-  for (const pair of rrule.split(";")) {
+  const rule = rrule.trim().replace(/^RRULE:/i, "");
+  for (const pair of rule.split(";")) {
     const [keyRaw, valueRaw] = pair.split("=");
     const key = String(keyRaw || "").trim().toUpperCase();
     const value = String(valueRaw || "").trim();
@@ -918,6 +1104,14 @@ function readPositiveInt(raw, field, fallback) {
   return num;
 }
 
+function readPositiveNumber(raw, fallback) {
+  const num = Number(raw);
+  if (Number.isFinite(num) && num > 0) {
+    return num;
+  }
+  return fallback;
+}
+
 function normalizeByDay(raw) {
   if (raw === undefined || raw === null || raw === "") {
     return [];
@@ -926,10 +1120,59 @@ function normalizeByDay(raw) {
   const values = Array.isArray(raw) ? raw : String(raw).split(",");
   const unique = new Set();
   for (const value of values) {
-    const normalized = normalizeWeekday(value, "recurrence.byDay");
-    unique.add(normalized);
+    const token = parseByDayToken(value);
+    unique.add(token.normalized);
   }
   return [...unique];
+}
+
+function parseByDayToken(raw) {
+  if (typeof raw !== "string") {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must contain weekday values");
+  }
+
+  const match = raw.trim().toUpperCase().match(/^([+-]?)(\d{1,2})?(MO|TU|WE|TH|FR|SA|SU)$/);
+  if (!match || (match[1] && !match[2])) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay must contain weekday values like MO,+1MO,2TU,-1FR");
+  }
+
+  const [, sign, ordinalRaw, weekday] = match;
+  if (!ordinalRaw) {
+    return { ordinal: null, weekday, normalized: weekday };
+  }
+
+  const magnitude = Number(ordinalRaw);
+  if (!Number.isInteger(magnitude) || magnitude < 1 || magnitude > 53) {
+    throw new ApiError(400, "INVALID_RECURRENCE", "recurrence.byDay ordinals must be between 1 and 53");
+  }
+
+  const ordinal = sign === "-" ? -magnitude : magnitude;
+  return {
+    ordinal,
+    weekday,
+    normalized: `${sign}${magnitude}${weekday}`,
+  };
+}
+
+function monthlyByDayCanMatchMonthDay(byDay, byMonthDay) {
+  return byDay.some((token) => {
+    const { ordinal } = parseByDayToken(token);
+    if (ordinal === null) {
+      return true;
+    }
+    return byMonthDay.some((dayOfMonth) => ordinalCanMatchMonthDay(ordinal, dayOfMonth));
+  });
+}
+
+function ordinalCanMatchMonthDay(ordinal, dayOfMonth) {
+  if (ordinal > 0) {
+    return dayOfMonth >= 1 + (ordinal - 1) * 7 && dayOfMonth <= ordinal * 7;
+  }
+
+  const magnitude = Math.abs(ordinal);
+  const minDay = Math.max(1, 28 - (magnitude * 7 - 1));
+  const maxDay = 31 - (magnitude - 1) * 7;
+  return dayOfMonth >= minDay && dayOfMonth <= maxDay;
 }
 
 function normalizeByMonthDay(raw) {
@@ -1002,6 +1245,170 @@ function addMonthsUtc(date, deltaMonths) {
 
 function daysInMonthUtc(year, month) {
   return new Date(Date.UTC(year, month + 1, 0)).getUTCDate();
+}
+
+function effectiveMonthDays(days, maxDay) {
+  return [...new Set(days.map((day) => Math.min(day, maxDay)))].sort((a, b) => a - b);
+}
+
+function monthlyByDayCandidates(year, month, byDay, byMonthDay, time) {
+  const candidates = new Map();
+  const maxDay = daysInMonthUtc(year, month);
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(effectiveMonthDays(byMonthDay, maxDay)) : null;
+
+  for (const token of byDay) {
+    const { ordinal, weekday } = parseByDayToken(token);
+    if (ordinal !== null) {
+      const date = nthWeekdayOfMonth(year, month, weekday, ordinal);
+      if (date && (!allowedMonthDays || allowedMonthDays.has(date.getUTCDate()))) {
+        const candidate = withUtcTime(date, time);
+        candidates.set(candidate.toISOString(), candidate);
+      }
+      continue;
+    }
+
+    const weekdayIndex = weekdayToIndex(weekday);
+    for (let dayOfMonth = 1; dayOfMonth <= maxDay; dayOfMonth += 1) {
+      if (allowedMonthDays && !allowedMonthDays.has(dayOfMonth)) {
+        continue;
+      }
+      const date = new Date(Date.UTC(year, month, dayOfMonth));
+      if (date.getUTCDay() === weekdayIndex) {
+        const candidate = withUtcTime(date, time);
+        candidates.set(candidate.toISOString(), candidate);
+      }
+    }
+  }
+
+  return [...candidates.values()].sort((a, b) => a - b);
+}
+
+function nthWeekdayOfMonth(year, month, weekday, ordinal) {
+  const weekdayIndex = weekdayToIndex(weekday);
+  const maxDay = daysInMonthUtc(year, month);
+
+  if (ordinal > 0) {
+    const firstWeekday = new Date(Date.UTC(year, month, 1)).getUTCDay();
+    const firstMatchingDay = 1 + ((weekdayIndex - firstWeekday + 7) % 7);
+    const dayOfMonth = firstMatchingDay + (ordinal - 1) * 7;
+    return dayOfMonth <= maxDay ? new Date(Date.UTC(year, month, dayOfMonth)) : null;
+  }
+
+  const lastWeekday = new Date(Date.UTC(year, month, maxDay)).getUTCDay();
+  const lastMatchingDay = maxDay - ((lastWeekday - weekdayIndex + 7) % 7);
+  const dayOfMonth = lastMatchingDay + (ordinal + 1) * 7;
+  return dayOfMonth >= 1 ? new Date(Date.UTC(year, month, dayOfMonth)) : null;
+}
+
+function shouldUseZonedRecurrence(event) {
+  return !event.allDay && isSupportedIanaTimeZone(event.timezone) && !isUtcTimeZone(event.timezone);
+}
+
+function isUtcTimeZone(timezone) {
+  return String(timezone || "").toUpperCase() === "UTC";
+}
+
+function isSupportedIanaTimeZone(timezone) {
+  if (typeof timezone !== "string" || timezone.trim() === "") {
+    return false;
+  }
+
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone: timezone }).format(new Date(0));
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function toZonedDateTime(iso, timezone) {
+  return Temporal.Instant.from(iso).toZonedDateTimeISO(timezone);
+}
+
+function zonedDateTimeToDate(zonedDateTime) {
+  return new Date(zonedDateTime.toInstant().toString());
+}
+
+function pickZonedTime(zonedDateTime) {
+  return {
+    hour: zonedDateTime.hour,
+    minute: zonedDateTime.minute,
+    second: zonedDateTime.second,
+    millisecond: zonedDateTime.millisecond,
+  };
+}
+
+function zonedFromPlainDate(date, time, timezone) {
+  return Temporal.ZonedDateTime.from(
+    {
+      timeZone: timezone,
+      year: date.year,
+      month: date.month,
+      day: date.day,
+      hour: time.hour,
+      minute: time.minute,
+      second: time.second,
+      millisecond: time.millisecond,
+    },
+    { disambiguation: "compatible", overflow: "reject" }
+  );
+}
+
+function temporalDayToWeekdayIndex(dayOfWeek) {
+  return dayOfWeek % 7;
+}
+
+function daysInMonthZoned(year, month) {
+  return Temporal.PlainDate.from({ year, month, day: 1 }).daysInMonth;
+}
+
+function monthlyByDayCandidatesZoned(year, month, byDay, byMonthDay, time, timezone) {
+  const candidates = new Map();
+  const maxDay = daysInMonthZoned(year, month);
+  const allowedMonthDays = byMonthDay.length > 0 ? new Set(effectiveMonthDays(byMonthDay, maxDay)) : null;
+
+  for (const token of byDay) {
+    const { ordinal, weekday } = parseByDayToken(token);
+    if (ordinal !== null) {
+      const date = nthWeekdayOfMonthZoned(year, month, weekday, ordinal);
+      if (date && (!allowedMonthDays || allowedMonthDays.has(date.day))) {
+        const candidate = zonedFromPlainDate(date, time, timezone);
+        candidates.set(candidate.toInstant().toString(), candidate);
+      }
+      continue;
+    }
+
+    const weekdayIndex = weekdayToIndex(weekday);
+    for (let dayOfMonth = 1; dayOfMonth <= maxDay; dayOfMonth += 1) {
+      if (allowedMonthDays && !allowedMonthDays.has(dayOfMonth)) {
+        continue;
+      }
+      const date = Temporal.PlainDate.from({ year, month, day: dayOfMonth });
+      if (temporalDayToWeekdayIndex(date.dayOfWeek) === weekdayIndex) {
+        const candidate = zonedFromPlainDate(date, time, timezone);
+        candidates.set(candidate.toInstant().toString(), candidate);
+      }
+    }
+  }
+
+  return [...candidates.values()].sort((a, b) => Temporal.Instant.compare(a.toInstant(), b.toInstant()));
+}
+
+function nthWeekdayOfMonthZoned(year, month, weekday, ordinal) {
+  const weekdayIndex = weekdayToIndex(weekday);
+  const maxDay = daysInMonthZoned(year, month);
+
+  if (ordinal > 0) {
+    const firstWeekday = temporalDayToWeekdayIndex(Temporal.PlainDate.from({ year, month, day: 1 }).dayOfWeek);
+    const firstMatchingDay = 1 + ((weekdayIndex - firstWeekday + 7) % 7);
+    const dayOfMonth = firstMatchingDay + (ordinal - 1) * 7;
+    return dayOfMonth <= maxDay ? Temporal.PlainDate.from({ year, month, day: dayOfMonth }) : null;
+  }
+
+  const lastWeekday = temporalDayToWeekdayIndex(Temporal.PlainDate.from({ year, month, day: maxDay }).dayOfWeek);
+  const lastMatchingDay = maxDay - ((lastWeekday - weekdayIndex + 7) % 7);
+  const dayOfMonth = lastMatchingDay + (ordinal + 1) * 7;
+  return dayOfMonth >= 1 ? Temporal.PlainDate.from({ year, month, day: dayOfMonth }) : null;
 }
 
 function startOfWeek(date, weekStartDayIndex) {

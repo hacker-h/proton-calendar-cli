@@ -5,6 +5,8 @@ import { ApiError } from "../errors.js";
 import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
+const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
+const EVENT_PAGE_LIMIT = 10;
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
   INVITE: 2,
@@ -21,6 +23,8 @@ export class ProtonCalendarClient {
     this.fetchImpl = options.fetchImpl || fetch;
     this.timeoutMs = options.timeoutMs || 10000;
     this.maxRetries = options.maxRetries ?? 2;
+    this.delay = options.delay || delay;
+    this.retryAfterMaxMs = options.retryAfterMaxMs;
     this.appVersion = options.appVersion || DEFAULT_PROTON_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
@@ -42,6 +46,7 @@ export class ProtonCalendarClient {
       });
 
     this.cachedUID = "";
+    this.cachedUIDGeneration = null;
     this.cachedContext = null;
   }
 
@@ -53,6 +58,13 @@ export class ProtonCalendarClient {
       username: payload?.User?.Name || null,
       userId: payload?.User?.ID || null,
     };
+  }
+
+  async listCalendars() {
+    const uid = await this.#getUID();
+    const payload = await this.#requestJSON("GET", "/api/calendar/v1", { uid });
+    const calendars = Array.isArray(payload?.Calendars) ? payload.Calendars : [];
+    return calendars.map(normalizeCalendar).filter((calendar) => calendar.id);
   }
 
   async listEvents({ calendarId, start, end, limit, cursor }) {
@@ -100,7 +112,7 @@ export class ProtonCalendarClient {
     return this.#toEventModel(context, payload.Event);
   }
 
-  async createEvent({ calendarId, event }) {
+  async createEvent({ calendarId, event, idempotencyKey }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
 
@@ -142,14 +154,14 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
 
     const created = assertSyncEventResponse(response);
     return this.#toEventModel(context, created);
   }
 
-  async updateEvent({ calendarId, eventId, patch, scope = "series", occurrenceStart = null }) {
+  async updateEvent({ calendarId, eventId, patch, idempotencyKey, scope = "series", occurrenceStart = null }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
 
@@ -217,14 +229,14 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
 
     const updated = assertSyncEventResponse(response);
     return this.#toEventModel(context, updated);
   }
 
-  async deleteEvent({ calendarId, eventId, scope = "series", occurrenceStart = null }) {
+  async deleteEvent({ calendarId, eventId, idempotencyKey, scope = "series", occurrenceStart = null }) {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
     const body = {
@@ -241,7 +253,7 @@ export class ProtonCalendarClient {
     const response = await this.#requestJSON(
       "PUT",
       `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body }
+      { uid, body, idempotencyKey }
     );
     assertSyncDeleteResponse(response);
     return null;
@@ -254,7 +266,7 @@ export class ProtonCalendarClient {
     for (const type of queryTypes) {
       let page = 0;
       let more = true;
-      while (more && page < 10) {
+      while (more && page < EVENT_PAGE_LIMIT) {
         const payload = await this.#requestJSON(
           "GET",
           `/api/calendar/v1/${encodeURIComponent(calendarId)}/events`,
@@ -281,6 +293,17 @@ export class ProtonCalendarClient {
 
         more = Boolean(payload?.More);
         page += 1;
+      }
+
+      if (more) {
+        throw new ApiError(502, "UPSTREAM_EVENT_PAGE_LIMIT", "Proton event listing exceeded the page limit", {
+          calendarId,
+          startUnix,
+          endUnix,
+          type,
+          pageLimit: EVENT_PAGE_LIMIT,
+          pageSize,
+        });
       }
     }
 
@@ -397,8 +420,12 @@ export class ProtonCalendarClient {
   }
 
   async #getUID() {
-    if (this.cachedUID) {
+    const sessionGeneration = await this.#getSessionGeneration();
+    if (this.cachedUID && this.cachedUIDGeneration === sessionGeneration) {
       return this.cachedUID;
+    }
+    if (this.cachedUID) {
+      this.#resetAuthCaches();
     }
 
     const candidates = await this.sessionStore.getUIDCandidates();
@@ -410,6 +437,7 @@ export class ProtonCalendarClient {
       try {
         await this.#requestJSON("GET", "/api/core/v4/users", { uid: candidate, allowAuthFailure: false });
         this.cachedUID = candidate;
+        this.cachedUIDGeneration = sessionGeneration;
         return candidate;
       } catch {
         continue;
@@ -420,7 +448,11 @@ export class ProtonCalendarClient {
   }
 
   async #getContext(calendarId) {
-    if (this.cachedContext?.calendarId === calendarId) {
+    const sessionGeneration = await this.#getSessionGeneration();
+    if (
+      this.cachedContext?.calendarId === calendarId &&
+      (sessionGeneration === null || this.cachedContext.sessionGeneration === sessionGeneration)
+    ) {
       return this.cachedContext;
     }
 
@@ -517,6 +549,7 @@ export class ProtonCalendarClient {
     this.cachedContext = {
       uid,
       calendarId,
+      sessionGeneration,
       memberId: member.ID,
       addressEmail: address.Email,
       addressPrivateKey,
@@ -784,6 +817,28 @@ export class ProtonCalendarClient {
 
         await this.#persistResponseCookies(url, response, `${method}:${pathname}`);
         const payload = await parseResponsePayload(response);
+        const retryDetails = readRetryAfterDetails(response, this.retryAfterMaxMs);
+        const authState = classifyAuthState(response.status, payload);
+
+        if (response.status === 429) {
+          if (!isFinalAttempt) {
+            await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
+            continue;
+          }
+          throw new ApiError(429, "RATE_LIMITED", "Proton rate limit exceeded", {
+            status: 429,
+            retryable: true,
+            ...retryDetails,
+          });
+        }
+
+        if (authState) {
+          throw new ApiError(response.status, authState.code, authState.message, {
+            status: response.status,
+            retryable: false,
+            authState: authState.authState,
+          });
+        }
 
         if (response.status === 401 || response.status === 403) {
           if (options.allowAuthRefresh !== false && !authRefreshAttempted) {
@@ -810,23 +865,23 @@ export class ProtonCalendarClient {
           throw new ApiError(404, "NOT_FOUND", "Resource not found");
         }
 
-        if ((response.status === 429 || response.status >= 500) && !isFinalAttempt) {
-          await delay(backoffMs(attempt));
+        if (response.status >= 500 && !isFinalAttempt) {
+          await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
           continue;
         }
 
         if (!response.ok) {
           throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
             status: response.status,
-            payload,
+            retryable: response.status >= 500 ? true : undefined,
+            ...retryDetails,
+            ...sanitizeUpstreamPayload(payload),
           });
         }
 
         if (payload && typeof payload === "object" && typeof payload.Code === "number") {
           if (![1000, 1001].includes(payload.Code)) {
-            throw new ApiError(502, "UPSTREAM_ERROR", payload.Error || "Unexpected upstream response", {
-              payload,
-            });
+            throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected upstream response", sanitizeUpstreamPayload(payload));
           }
         }
 
@@ -838,11 +893,11 @@ export class ProtonCalendarClient {
 
         if (isFinalAttempt) {
           throw new ApiError(502, "UPSTREAM_UNREACHABLE", "Unable to reach Proton backend", {
-            message: error?.message,
+            cause: "network",
           });
         }
 
-        await delay(backoffMs(attempt));
+        await this.delay(backoffMs(attempt));
       }
     }
 
@@ -870,8 +925,27 @@ export class ProtonCalendarClient {
 
   #resetAuthCaches() {
     this.cachedUID = "";
+    this.cachedUIDGeneration = null;
     this.cachedContext = null;
   }
+
+  async #getSessionGeneration() {
+    if (typeof this.sessionStore.getGeneration !== "function") {
+      return null;
+    }
+    return await this.sessionStore.getGeneration();
+  }
+}
+
+function normalizeCalendar(calendar) {
+  const id = String(calendar?.ID || calendar?.CalendarID || "").trim();
+  const name = String(calendar?.Name || calendar?.DisplayName || calendar?.Title || id).trim();
+  return {
+    id,
+    name: name || id,
+    color: calendar?.Color || null,
+    permissions: calendar?.Permissions ?? null,
+  };
 }
 
 function findPersistedSession(persistedSessions, uid) {
@@ -895,7 +969,7 @@ function findPersistedSession(persistedSessions, uid) {
   return null;
 }
 
-async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBlobBase64 }) {
+export async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBlobBase64 }) {
   if (!clientKeyBase64 || !persistedBlobBase64) {
     throw new ApiError(401, "SESSION_BLOB_MISSING", "Missing client key or persisted session blob");
   }
@@ -904,8 +978,11 @@ async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBl
   const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
 
   const blobBytes = fromBase64(persistedBlobBase64);
-  const iv = blobBytes.slice(0, 16);
-  const ciphertext = blobBytes.slice(16);
+  // Proton persisted sessions still use the legacy WebClients sessionBlobCryptoHelper
+  // format: encryptDataWith16ByteIV()/decryptData(..., true). V3 helpers use the
+  // standard 12-byte AES-GCM IV, but persisted `blob` storage does not.
+  const iv = blobBytes.slice(0, LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
+  const ciphertext = blobBytes.slice(LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
 
   let decrypted;
   try {
@@ -1110,10 +1187,39 @@ function buildVcalendarVevent(properties) {
     if (value === undefined || value === null || String(value) === "") {
       continue;
     }
-    lines.push(`${key}:${value}`);
+    lines.push(foldIcsLine(`${key}:${value}`));
   }
   lines.push("END:VEVENT", "END:VCALENDAR", "");
   return lines.join("\r\n");
+}
+
+function foldIcsLine(line) {
+  if (Buffer.byteLength(line, "utf8") <= 75) {
+    return line;
+  }
+
+  const segments = [];
+  let segment = "";
+  let segmentBytes = 0;
+  let limit = 75;
+
+  for (const char of line) {
+    const charBytes = Buffer.byteLength(char, "utf8");
+    if (segment && segmentBytes + charBytes > limit) {
+      segments.push(segment);
+      segment = "";
+      segmentBytes = 0;
+      limit = 74;
+    }
+    segment += char;
+    segmentBytes += charBytes;
+  }
+
+  if (segment) {
+    segments.push(segment);
+  }
+
+  return segments.map((part, index) => (index === 0 ? part : ` ${part}`)).join("\r\n");
 }
 
 function unfoldIcsLines(ics) {
@@ -1446,23 +1552,22 @@ function fromBase64(value) {
 
 function assertSyncEventResponse(payload) {
   if (payload?.Code !== 1001 || !Array.isArray(payload?.Responses) || payload.Responses.length === 0) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected sync response payload", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected sync response payload", sanitizeUpstreamPayload(payload));
   }
 
   const op = payload.Responses[0]?.Response;
   if (!op) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing sync operation response", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Missing sync operation response", sanitizeUpstreamPayload(payload));
   }
 
   if (op.Code !== 1000) {
-    throw new ApiError(502, "UPSTREAM_ERROR", op.Error || "Sync operation failed", {
+    throw new ApiError(502, "UPSTREAM_ERROR", "Sync operation failed", {
       code: op.Code,
-      details: op.Details,
     });
   }
 
   if (!op.Event) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing event in sync response", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Missing event in sync response", sanitizeUpstreamPayload(payload));
   }
 
   return op.Event;
@@ -1470,7 +1575,7 @@ function assertSyncEventResponse(payload) {
 
 function assertSyncDeleteResponse(payload) {
   if (![1000, 1001].includes(payload?.Code)) {
-    throw new ApiError(502, "UPSTREAM_ERROR", payload?.Error || "Delete operation failed", { payload });
+    throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", sanitizeUpstreamPayload(payload));
   }
 
   if (!Array.isArray(payload?.Responses)) {
@@ -1480,12 +1585,19 @@ function assertSyncDeleteResponse(payload) {
   for (const item of payload.Responses) {
     const op = item?.Response;
     if (op && op.Code !== 1000) {
-      throw new ApiError(502, "UPSTREAM_ERROR", op.Error || "Delete operation failed", {
+      throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", {
         code: op.Code,
-        details: op.Details,
       });
     }
   }
+}
+
+function sanitizeUpstreamPayload(payload) {
+  const details = {};
+  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
+    details.code = payload.Code;
+  }
+  return details;
 }
 
 function getSetCookieHeaders(headers) {
@@ -1595,6 +1707,77 @@ function formatExpiry(value) {
 
 function backoffMs(attempt) {
   return Math.min(1500, 120 * 2 ** attempt);
+}
+
+function readRetryAfterDetails(response, retryAfterMaxMs) {
+  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
+  if (!Number.isFinite(retryAfterMs)) {
+    return {};
+  }
+
+  const maxMs = Number(retryAfterMaxMs);
+  const cappedMs = Number.isFinite(maxMs) && maxMs >= 0 ? Math.min(retryAfterMs, maxMs) : retryAfterMs;
+  return {
+    retryAfterMs: cappedMs,
+    retryAfterSeconds: Math.ceil(cappedMs / 1000),
+  };
+}
+
+function parseRetryAfterMs(value, nowMs = Date.now()) {
+  const raw = String(value || "").trim();
+  if (!raw) {
+    return Number.NaN;
+  }
+
+  const seconds = Number(raw);
+  if (Number.isFinite(seconds) && seconds >= 0) {
+    return seconds * 1000;
+  }
+
+  const dateMs = Date.parse(raw);
+  if (Number.isNaN(dateMs)) {
+    return Number.NaN;
+  }
+
+  return Math.max(0, dateMs - nowMs);
+}
+
+function classifyAuthState(status, payload) {
+  if (![401, 403].includes(status)) {
+    return null;
+  }
+
+  const text = JSON.stringify(payload || {}).toLowerCase();
+  if (/captcha|human.?verification|verify you are human/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "captcha");
+  }
+  if (/two.?factor|2fa|mfa|one.?time code|security code/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "mfa");
+  }
+  if (/email code|mail code/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "email_code");
+  }
+  if (/locked|disabled/.test(text)) {
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "account_locked");
+  }
+  if (/invalid.?refresh|refresh.?token|invalid.?grant|session revoked|deauth/.test(text)) {
+    return authState("AUTH_EXPIRED", "Proton session cannot be refreshed", "invalid_refresh");
+  }
+  if (/paid|plan|subscription/.test(text)) {
+    return authState("PROTON_PLAN_REQUIRED", "Proton account plan does not allow this operation", "plan_required");
+  }
+  if (/permission|not allowed|forbidden|access denied/.test(text)) {
+    return authState("PROTON_PERMISSION_DENIED", "Proton denied access to this operation", "permission_denied");
+  }
+  return null;
+}
+
+function authState(code, message, authStateValue) {
+  return {
+    code,
+    message,
+    authState: authStateValue,
+  };
 }
 
 async function parseResponsePayload(response) {

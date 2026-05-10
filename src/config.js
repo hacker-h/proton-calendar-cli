@@ -26,6 +26,7 @@ export function loadConfigFromEnv(env = process.env) {
     protonReloginCooldownMs: readNonNegativeNumber(env.PROTON_RELOGIN_COOLDOWN_MS, 300000),
     protonReloginLockPath: readOptional(env.PROTON_RELOGIN_LOCK_PATH),
     protonReloginUrl: readOptional(env.PROTON_RELOGIN_URL) || "https://calendar.proton.me/u/0",
+    recurrenceMaxIterations: readNumber(env.RECURRENCE_MAX_ITERATIONS, 50000),
   };
 }
 

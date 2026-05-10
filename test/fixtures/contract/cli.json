@@ -377,12 +377,96 @@
       "name": "invalid list flags error",
       "argv": ["ls", "--protected", "--unprotected"],
       "expected": {
-        "exitCode": 1,
+        "exitCode": 2,
         "stdout": "",
         "stderr": {
           "error": {
             "code": "INVALID_ARGS",
             "message": "Cannot use both --protected and --unprotected"
+          }
+        }
+      }
+    },
+    {
+      "name": "unknown command fails before config or API",
+      "argv": ["wat"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "UNKNOWN_COMMAND",
+            "message": "Unknown command: wat"
+          }
+        }
+      }
+    },
+    {
+      "name": "bad output mode fails before API",
+      "argv": ["ls", "-o", "yaml"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "Unsupported output format: yaml"
+          }
+        }
+      }
+    },
+    {
+      "name": "reversed list range fails before API",
+      "argv": ["ls", "--from", "2026-07-31", "--to", "2026-07-01"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "end must be after start"
+          }
+        }
+      }
+    },
+    {
+      "name": "edit missing id fails before API",
+      "argv": ["edit"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "eventId is required"
+          }
+        }
+      }
+    },
+    {
+      "name": "delete missing id fails before API",
+      "argv": ["rm"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "eventId is required"
+          }
+        }
+      }
+    },
+    {
+      "name": "invalid mutation scope fails before API",
+      "argv": ["rm", "evt-1", "--scope", "nope"],
+      "expected": {
+        "exitCode": 2,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "INVALID_ARGS",
+            "message": "--scope must be single, following, or series"
           }
         }
       }
@@ -412,7 +496,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 3,
         "stdout": "",
         "stderr": {
           "error": {
@@ -439,7 +523,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 4,
         "stdout": "",
         "stderr": {
           "error": {
@@ -477,7 +561,7 @@
         }
       },
       "expected": {
-        "exitCode": 1,
+        "exitCode": 5,
         "stdout": "",
         "stderr": {
           "error": {
@@ -485,6 +569,44 @@
             "message": "Unable to reach Proton backend",
             "details": {
               "cause": "network"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "unsupported private API state passthrough",
+      "argv": ["ls", "--start", "2026-05-01T00:00:00Z", "--end", "2026-05-02T00:00:00Z"],
+      "apiResponse": {
+        "status": 409,
+        "body": {
+          "error": {
+            "code": "AUTH_CHALLENGE_REQUIRED",
+            "message": "Proton requires interactive verification",
+            "details": {
+              "reason": "captcha"
+            }
+          }
+        }
+      },
+      "expectedRequest": {
+        "method": "GET",
+        "pathname": "/v1/events",
+        "query": {
+          "start": "2026-05-01T00:00:00.000Z",
+          "end": "2026-05-02T00:00:00.000Z",
+          "limit": "200"
+        }
+      },
+      "expected": {
+        "exitCode": 6,
+        "stdout": "",
+        "stderr": {
+          "error": {
+            "code": "AUTH_CHALLENGE_REQUIRED",
+            "message": "Proton requires interactive verification",
+            "details": {
+              "reason": "captcha"
             }
           }
         }
@@ -499,10 +621,15 @@
         "data": {
           "topic": "auth",
           "status": "refresh_recovered",
+          "automationReady": true,
           "reloginRequired": false,
           "refreshPossible": true,
           "refreshAttempted": true,
           "refreshSucceeded": true,
+          "nextStep": {
+            "code": "proceed",
+            "message": "Auth is ready for unattended calendar operations."
+          },
           "uid": "uid-1",
           "host": "https://calendar.proton.me",
           "uidCandidates": ["uid-1"],
@@ -542,7 +669,7 @@
               }
             ]
           },
-          "suggestions": ["Auth looks recoverable with current refresh cookies."]
+          "suggestions": ["Auth is ready for unattended calendar operations."]
         }
       },
       "stderr": ""

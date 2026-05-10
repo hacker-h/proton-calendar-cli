@@ -7,7 +7,23 @@ pnpm install --frozen-lockfile
 pnpm run ci:local
 ```
 
-Pull requests should not require Proton credentials. Use mocked/unit tests for normal changes. Live Proton checks are reserved for scheduled/manual canaries because they spend quota and can fail due to Proton-side auth challenges or backend drift.
+The local gate starts with `pnpm run check:toolchain`, which verifies the Node engine, the exact `packageManager` pnpm version, and the browser/cookie/crypto dependency metadata used by login automation. Use the pinned pnpm from `package.json`; do not update the lockfile with a different package manager version.
+
+For dependency maintenance, run:
+
+```bash
+pnpm run check:toolchain
+pnpm run check:browser
+pnpm outdated
+```
+
+When updating Playwright, Chrome/browser automation, `@steipete/sweet-cookie`, or `openpgp`, keep PR CI credential-free and use mocked tests first. Run live Proton canaries only through the scheduled/manual workflow with dedicated credentials, then check the dependency health artifact for outdated packages and browser install drift. For native cookie dependency updates, rerun `pnpm approve-builds` and review `pnpm-workspace.yaml` so approved build packages stay intentional.
+
+Pull requests should not require Proton credentials. Use mocked/unit tests for normal changes. Live Proton checks are reserved for scheduled/manual canaries because they spend quota and can fail due to Proton-side auth challenges or backend drift. To reproduce the canary locally with dedicated credentials, set `PROTON_USERNAME`, `PROTON_PASSWORD`, and optional `PROTON_TEST_CALENDAR_ID`, then run `pnpm run ci:live`; it bootstraps cookies, writes `secrets/ci-live.env`, starts the local API, and runs `pnpm run test:live`. When `API_BEARER_TOKEN` is not set, the live env writer creates a fresh per-run token and mirrors it to `PC_API_TOKEN`.
+
+GitLab CI should keep live Proton variables protected and masked, and live jobs should run only on protected runners/branches. Do not publish cookie bundles, generated live env files, browser profiles, or bearer tokens as artifacts; keep artifacts to sanitized reports such as `junit.xml` with a short expiration. If a future pipeline needs cross-job live handoff, add an explicit short-lived handoff with owner review instead of uploading reusable session material.
+
+When a scheduled/manual live canary fails, start with `reports/live-triage.json` or the printed `LIVE_CANARY_FAILED` details. Capture the command, run URL, `failureClass`, affected suite/check, endpoint or feature, sanitized request id/log excerpt, last passing run, owner, expiry, and linked issue. Quarantine is explicit metadata only: entries in `CI_LIVE_QUARANTINE_PATH` must include `id`, `suite`, `check`, `failureClass`, `owner`, `reason`, `expiresAt`, and `issue`, and failures still remain visible until the underlying drift is fixed. In GitHub Actions, set the manual `live_quarantine_path` input or repository variable `CI_LIVE_QUARANTINE_PATH` to a checked-in manifest path when a time-bounded quarantine needs to be displayed.
 
 Never commit files from `secrets/`, `.tmp/`, `.sisyphus/`, browser profiles, or raw CI artifacts.
 

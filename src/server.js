@@ -40,6 +40,7 @@ export function createApiServer(config, options = {}) {
       allowedCalendarIds: config.allowedCalendarIds,
       protonClient,
       sessionStore,
+      recurrenceMaxIterations: config.recurrenceMaxIterations,
     });
 
   const server = http.createServer(async (req, res) => {
@@ -69,6 +70,11 @@ export function createApiServer(config, options = {}) {
 
       if (method === "GET" && url.pathname === "/v1/auth/status") {
         send(200, { data: await service.authStatus() });
+        return;
+      }
+
+      if (method === "GET" && url.pathname === "/v1/calendars") {
+        send(200, { data: await service.listCalendars() });
         return;
       }
 
@@ -145,10 +151,10 @@ export function createApiServer(config, options = {}) {
       throw new ApiError(404, "NOT_FOUND", "Route not found");
     } catch (error) {
       if (isApiError(error)) {
-        send(error.status, toErrorPayload(error));
+        send(error.status, toErrorPayload(error, { requestId }));
         return;
       }
-      send(500, toErrorPayload(error));
+      send(500, toErrorPayload(error, { requestId }));
     }
   });
 

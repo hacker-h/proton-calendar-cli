@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdir, open, readFile, rm } from "node:fs/promises";
+import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { setTimeout as delay } from "node:timers/promises";
 import { fileURLToPath } from "node:url";
@@ -266,9 +266,7 @@ async function acquireRecoveryLock({ lockPath, timeoutMs, pollMs, staleMs, now }
         throw error;
       }
 
-      const startedAt = await readLockStartedAt(lockPath);
-      const stale = !Number.isFinite(startedAt) || now() - startedAt > staleMs;
-      if (stale) {
+      if (await isRecoveryLockStale(lockPath, staleMs, now)) {
         await rm(lockPath, { force: true });
         continue;
       }
@@ -300,6 +298,21 @@ async function readLockStartedAt(lockPath) {
     return Number.isFinite(startedAt) ? startedAt : Number.NaN;
   } catch {
     return Number.NaN;
+  }
+}
+
+async function isRecoveryLockStale(lockPath, staleMs, now) {
+  const currentTime = now();
+  const startedAt = await readLockStartedAt(lockPath);
+  if (Number.isFinite(startedAt)) {
+    return currentTime - startedAt > staleMs;
+  }
+
+  try {
+    const fileStat = await stat(lockPath);
+    return currentTime - fileStat.mtimeMs > staleMs;
+  } catch {
+    return true;
   }
 }
 
