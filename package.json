@@ -20,6 +20,7 @@
     "bootstrap:cookies:ci": "node scripts/ci/bootstrap-proton-session.mjs",
     "check:browser": "pnpm exec playwright install --with-deps chromium && node scripts/ci/browser-smoke.mjs",
     "check:toolchain": "node scripts/ci/dependency-health.mjs",
+    "ci:live": "node scripts/ci/run-live-canary.mjs",
     "ci:local": "pnpm run check:toolchain && pnpm test:unit && pnpm run smoke:package",
     "pc": "node src/cli.js",
     "release": "semantic-release",
