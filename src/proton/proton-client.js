@@ -6,7 +6,6 @@ import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
 const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
-const DEFAULT_RETRY_AFTER_MAX_MS = 60000;
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
   INVITE: 2,
@@ -24,7 +23,7 @@ export class ProtonCalendarClient {
     this.timeoutMs = options.timeoutMs || 10000;
     this.maxRetries = options.maxRetries ?? 2;
     this.delay = options.delay || delay;
-    this.retryAfterMaxMs = options.retryAfterMaxMs ?? DEFAULT_RETRY_AFTER_MAX_MS;
+    this.retryAfterMaxMs = options.retryAfterMaxMs;
     this.appVersion = options.appVersion || DEFAULT_PROTON_APP_VERSION;
     this.locale = options.locale || "en-US";
     this.debugAuth = Boolean(options.debugAuth);
@@ -796,7 +795,7 @@ export class ProtonCalendarClient {
         await this.#persistResponseCookies(url, response, `${method}:${pathname}`);
         const payload = await parseResponsePayload(response);
         const retryDetails = readRetryAfterDetails(response, this.retryAfterMaxMs);
-        const challenge = classifyAuthChallenge(response.status, payload);
+        const authState = classifyAuthState(response.status, payload);
 
         if (response.status === 429) {
           if (!isFinalAttempt) {
@@ -810,11 +809,11 @@ export class ProtonCalendarClient {
           });
         }
 
-        if (challenge) {
-          throw new ApiError(response.status, "AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", {
+        if (authState) {
+          throw new ApiError(response.status, authState.code, authState.message, {
             status: response.status,
             retryable: false,
-            challenge,
+            authState: authState.authState,
           });
         }
 
@@ -851,6 +850,7 @@ export class ProtonCalendarClient {
         if (!response.ok) {
           throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
             status: response.status,
+            retryable: response.status >= 500 ? true : undefined,
             ...retryDetails,
             ...sanitizeUpstreamPayload(payload),
           });
@@ -1684,7 +1684,8 @@ function readRetryAfterDetails(response, retryAfterMaxMs) {
     return {};
   }
 
-  const cappedMs = Math.min(retryAfterMs, retryAfterMaxMs);
+  const maxMs = Number(retryAfterMaxMs);
+  const cappedMs = Number.isFinite(maxMs) && maxMs >= 0 ? Math.min(retryAfterMs, maxMs) : retryAfterMs;
   return {
     retryAfterMs: cappedMs,
     retryAfterSeconds: Math.ceil(cappedMs / 1000),
@@ -1710,25 +1711,42 @@ function parseRetryAfterMs(value, nowMs = Date.now()) {
   return Math.max(0, dateMs - nowMs);
 }
 
-function classifyAuthChallenge(status, payload) {
+function classifyAuthState(status, payload) {
   if (![401, 403].includes(status)) {
     return null;
   }
 
   const text = JSON.stringify(payload || {}).toLowerCase();
   if (/captcha|human.?verification|verify you are human/.test(text)) {
-    return "captcha";
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "captcha");
   }
   if (/two.?factor|2fa|mfa|one.?time code|security code/.test(text)) {
-    return "mfa";
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "mfa");
   }
   if (/email code|mail code/.test(text)) {
-    return "email_code";
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "email_code");
   }
   if (/locked|disabled/.test(text)) {
-    return "account_locked";
+    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "account_locked");
+  }
+  if (/invalid.?refresh|refresh.?token|invalid.?grant|session revoked|deauth/.test(text)) {
+    return authState("AUTH_EXPIRED", "Proton session cannot be refreshed", "invalid_refresh");
+  }
+  if (/paid|plan|subscription/.test(text)) {
+    return authState("PROTON_PLAN_REQUIRED", "Proton account plan does not allow this operation", "plan_required");
+  }
+  if (/permission|not allowed|forbidden|access denied/.test(text)) {
+    return authState("PROTON_PERMISSION_DENIED", "Proton denied access to this operation", "permission_denied");
   }
   return null;
+}
+
+function authState(code, message, authStateValue) {
+  return {
+    code,
+    message,
+    authState: authStateValue,
+  };
 }
 
 async function parseResponsePayload(response) {
