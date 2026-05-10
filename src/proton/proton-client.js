@@ -6,6 +6,7 @@ import { ProtonAuthManager } from "./proton-auth-manager.js";
 
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
 const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
+const EVENT_PAGE_LIMIT = 10;
 const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
   SEE: 1,
   INVITE: 2,
@@ -264,7 +265,7 @@ export class ProtonCalendarClient {
     for (const type of queryTypes) {
       let page = 0;
       let more = true;
-      while (more && page < 10) {
+      while (more && page < EVENT_PAGE_LIMIT) {
         const payload = await this.#requestJSON(
           "GET",
           `/api/calendar/v1/${encodeURIComponent(calendarId)}/events`,
@@ -291,6 +292,17 @@ export class ProtonCalendarClient {
 
         more = Boolean(payload?.More);
         page += 1;
+      }
+
+      if (more) {
+        throw new ApiError(502, "UPSTREAM_EVENT_PAGE_LIMIT", "Proton event listing exceeded the page limit", {
+          calendarId,
+          startUnix,
+          endUnix,
+          type,
+          pageLimit: EVENT_PAGE_LIMIT,
+          pageSize,
+        });
       }
     }
 

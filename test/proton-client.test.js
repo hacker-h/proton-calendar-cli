@@ -206,6 +206,49 @@ test("upstream 503 retries with fallback backoff when Retry-After is absent", as
   assert.deepEqual(delays, [240]);
 });
 
+test("Proton event page cap fails closed instead of silently truncating", async () => {
+  const requests = [];
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      requests.push(parsed);
+      return jsonResponse(200, { Code: 1000, Events: [], More: true });
+    },
+    maxRetries: 0,
+  });
+
+  await assert.rejects(
+    () =>
+      client.listEvents({
+        calendarId: "cal-1",
+        start: "2026-03-01T00:00:00.000Z",
+        end: "2026-04-01T00:00:00.000Z",
+        limit: 200,
+      }),
+    (error) => {
+      assert.equal(error.code, "UPSTREAM_EVENT_PAGE_LIMIT");
+      assert.equal(error.status, 502);
+      assert.deepEqual(error.details, {
+        calendarId: "cal-1",
+        startUnix: 1772323200,
+        endUnix: 1775001600,
+        type: 0,
+        pageLimit: 10,
+        pageSize: 100,
+      });
+      return true;
+    }
+  );
+
+  assert.equal(requests.length, 10);
+  assert.equal(requests[9].searchParams.get("Page"), "9");
+});
+
 test("interactive auth challenges do not trigger relogin", async () => {
   let reloginAttempts = 0;
   const client = new ProtonCalendarClient({
