@@ -130,7 +130,7 @@ export TARGET_CALENDAR_ID=cal_123
 # optional: export DEFAULT_CALENDAR_ID=cal_123
 ```
 
-Run `pc calendars` after the API server is running to see the calendars visible to the saved Proton session and which one is configured as default or target. `pc login --default-calendar cal_123` writes `DEFAULT_CALENDAR_ID` and allows all calendars discovered during login. `pc login --target-calendar cal_123` preserves the hard-lock mode for automations that must never mutate another calendar.
+Run `pc calendars` after the API server is running to see the calendars visible to the saved Proton session and which one is configured as default or target. `pc login --default-calendar cal_123` writes `DEFAULT_CALENDAR_ID` and allows all calendars discovered during login. To change the local default later without re-running browser login, run `pc calendars --set-default cal_456 --server-env secrets/pc-server.env`, then restart the API server with the updated env file. `pc login --target-calendar cal_123` preserves the hard-lock mode for automations that must never mutate another calendar.
 
 `TARGET_CALENDAR_ID` hard-locks all requests to one calendar. Without it, `ALLOWED_CALENDAR_IDS` controls explicit calendar routes and `DEFAULT_CALENDAR_ID` is used for plain event commands.
 

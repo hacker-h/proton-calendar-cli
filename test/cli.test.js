@@ -200,6 +200,116 @@ test("calendars command returns discovered calendars", async () => {
   assert.equal(stdout.value(), "id\tname\tdefault\ttarget\tcolor\tpermissions\ncal-1\tWork\tyes\tno\t#3366ff\t127\n");
 });
 
+test("calendars command can update default calendar without login", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-calendar-default-test-"));
+  const serverEnvPath = path.join(tmpDir, "pc-server.env");
+  await writeFile(
+    serverEnvPath,
+    [
+      'export API_BEARER_TOKEN="token"',
+      'export ALLOWED_CALENDAR_IDS="cal-1,cal-2"',
+      'export DEFAULT_CALENDAR_ID="cal-1"',
+      'export COOKIE_BUNDLE_PATH="secrets/proton-cookies.json"',
+      'export PROTON_BASE_URL="https://calendar.proton.me"',
+      'export PC_API_BASE_URL="http://127.0.0.1:8787"',
+      'export PC_API_TOKEN="token"',
+      "",
+    ].join("\n"),
+    { mode: 0o600 }
+  );
+
+  const stdout = createWriter();
+  const exitCode = await runPcCli(["calendars", "--set-default", "cal-2", "--server-env", serverEnvPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => jsonResponse(200, {
+      data: {
+        targetCalendarId: null,
+        defaultCalendarId: "cal-1",
+        calendars: [
+          { id: "cal-1", name: "Work", default: true, target: false },
+          { id: "cal-2", name: "Team", default: false, target: false },
+        ],
+      },
+    }),
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  const envFile = await readFile(serverEnvPath, "utf8");
+  assert.equal(envFile.includes("TARGET_CALENDAR_ID"), false);
+  assert.equal(envFile.includes('ALLOWED_CALENDAR_IDS="cal-1,cal-2"'), true);
+  assert.equal(envFile.includes('DEFAULT_CALENDAR_ID="cal-2"'), true);
+  assert.equal(JSON.parse(stdout.value()).data.defaultCalendarId, "cal-2");
+});
+
+test("calendars command refuses default changes while target locked", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-calendar-target-lock-test-"));
+  const serverEnvPath = path.join(tmpDir, "pc-server.env");
+  await writeFile(serverEnvPath, 'export TARGET_CALENDAR_ID="cal-1"\n', { mode: 0o600 });
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["calendars", "--set-default", "cal-2", "--server-env", serverEnvPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => jsonResponse(200, {
+      data: {
+        targetCalendarId: "cal-1",
+        calendars: [
+          { id: "cal-1", name: "Work", default: false, target: true },
+          { id: "cal-2", name: "Team", default: false, target: false },
+        ],
+      },
+    }),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+});
+
+test("login rejects unknown default calendar", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-login-invalid-calendar-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  await writeLoginCookieBundle(cookieBundlePath);
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["login", "--cookie-bundle", cookieBundlePath, "--default-calendar", "missing-cal"], {
+    env: {},
+    bootstrapRunner: async () => {},
+    fetchImpl: loginFetchWithCalendars([{ ID: "cal-1" }]),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+});
+
+test("login rejects accounts with no calendars", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-login-no-calendars-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  await writeLoginCookieBundle(cookieBundlePath);
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["login", "--cookie-bundle", cookieBundlePath], {
+    env: {},
+    bootstrapRunner: async () => {},
+    fetchImpl: loginFetchWithCalendars([]),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(JSON.parse(stderr.value()).error.code, "LOGIN_FAILED");
+});
+
 test("authorize alias works for login", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-authorize-test-"));
   const cookieBundlePath = path.join(tmpDir, "cookies.json");
@@ -1710,4 +1820,36 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+async function writeLoginCookieBundle(cookieBundlePath) {
+  await writeFile(
+    cookieBundlePath,
+    `${JSON.stringify({
+      cookies: [
+        {
+          name: "pm-session",
+          value: "valid-session",
+          domain: "calendar.proton.me",
+          path: "/",
+          secure: false,
+        },
+      ],
+      uidCandidates: ["uid-1"],
+    }, null, 2)}\n`
+  );
+  await chmod(cookieBundlePath, 0o600);
+}
+
+function loginFetchWithCalendars(calendars) {
+  return async (url) => {
+    const parsed = new URL(String(url));
+    if (parsed.pathname === "/api/core/v4/users") {
+      return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+    }
+    if (parsed.pathname === "/api/calendar/v1") {
+      return jsonResponse(200, { Code: 1000, Calendars: calendars });
+    }
+    return jsonResponse(404, { Code: 404, Error: "not found" });
+  };
 }

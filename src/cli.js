@@ -76,6 +76,10 @@ Doctor options:
   --proton-base-url <url> Proton base URL to probe
   --fail-on-relogin-required  Exit non-zero when browser login is required
 
+Calendars options:
+  --set-default <id> Set the default calendar in the generated server env file
+  --server-env <path> Server env file to update when setting default
+
 List options:
   --protected         Show only protected events
   --unprotected       Show only unprotected events
@@ -160,7 +164,7 @@ export async function runPcCli(argv, options = {}) {
     }
 
     if (apiCommand === "calendars") {
-      const result = await runCalendarsCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
+      const result = await runCalendarsCommand(rest, { env, apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
@@ -401,15 +405,58 @@ async function runDoctorCommand(args, context) {
 }
 
 async function runCalendarsCommand(args, context) {
-  const parsed = parseCalendarsArgs(args);
+  const parsed = parseCalendarsArgs(args, context.env);
+  const payload = await requestJson(context.fetchImpl, {
+    apiBaseUrl: context.apiBaseUrl,
+    apiToken: context.apiToken,
+    method: "GET",
+    path: "/v1/calendars",
+  });
+
+  if (!parsed.defaultCalendarId) {
+    return {
+      output: parsed.output,
+      payload,
+    };
+  }
+
+  const calendars = Array.isArray(payload?.data?.calendars) ? payload.data.calendars : [];
+  const allowedCalendarIds = calendars.map((calendar) => String(calendar?.id || "")).filter(Boolean);
+  if (!allowedCalendarIds.includes(parsed.defaultCalendarId)) {
+    throw new CliError("INVALID_ARGS", `Requested calendar not found: ${parsed.defaultCalendarId}`);
+  }
+  if (payload?.data?.targetCalendarId) {
+    throw new CliError(
+      "INVALID_ARGS",
+      "Cannot set a default calendar while TARGET_CALENDAR_ID hard-lock mode is active. Re-run pc login --default-calendar to switch modes."
+    );
+  }
+
+  await updateServerEnvCalendarConfig(parsed.serverEnvPath, {
+    apiToken: context.apiToken,
+    apiBaseUrl: context.apiBaseUrl,
+    defaultCalendarId: parsed.defaultCalendarId,
+    allowedCalendarIds,
+    env: context.env,
+  });
+
+  const nextPayload = {
+    ...payload,
+    data: {
+      ...payload.data,
+      defaultCalendarId: parsed.defaultCalendarId,
+      allowedCalendarIds,
+      calendars: calendars.map((calendar) => ({
+        ...calendar,
+        default: calendar.id === parsed.defaultCalendarId,
+      })),
+      serverEnvPath: parsed.serverEnvPath,
+    },
+  };
+
   return {
     output: parsed.output,
-    payload: await requestJson(context.fetchImpl, {
-      apiBaseUrl: context.apiBaseUrl,
-      apiToken: context.apiToken,
-      method: "GET",
-      path: "/v1/calendars",
-    }),
+    payload: nextPayload,
   };
 }
 
@@ -718,17 +765,33 @@ function parseLogoutArgs(args, env) {
   };
 }
 
-function parseCalendarsArgs(args) {
-  const state = { output: "json" };
+function parseCalendarsArgs(args, env) {
+  const state = {
+    output: "json",
+    defaultCalendarId: null,
+    serverEnvPath: path.resolve(env.PC_SERVER_ENV_PATH || DEFAULT_SERVER_ENV_PATH),
+  };
   for (let i = 0; i < args.length; i += 1) {
     const token = args[i];
     if (token === "-o" || token === "--output") {
       state.output = requireValue(args, ++i, token);
       continue;
     }
+    if (token === "--set-default") {
+      state.defaultCalendarId = requireValue(args, ++i, token);
+      continue;
+    }
+    if (token === "--server-env") {
+      state.serverEnvPath = path.resolve(requireValue(args, ++i, token));
+      continue;
+    }
     throw new CliError("INVALID_ARGS", `Unknown calendars option: ${token}`);
   }
-  return { output: normalizeOutput(state.output) };
+  return {
+    output: normalizeOutput(state.output),
+    defaultCalendarId: state.defaultCalendarId,
+    serverEnvPath: state.serverEnvPath,
+  };
 }
 
 async function runBootstrapScript(bootstrapArgs) {
@@ -1106,6 +1169,49 @@ async function writeServerEnv(filePath, values) {
   await mkdir(path.dirname(filePath), { recursive: true });
   await writeFile(filePath, lines.join("\n"), { mode: 0o600 });
   await chmodOwnerOnly(filePath);
+}
+
+async function updateServerEnvCalendarConfig(filePath, values) {
+  const existing = await readServerEnvFile(filePath);
+  await writeServerEnv(filePath, {
+    apiToken: existing.API_BEARER_TOKEN || existing.PC_API_TOKEN || values.apiToken,
+    targetCalendarId: null,
+    defaultCalendarId: values.defaultCalendarId,
+    allowedCalendarIds: values.allowedCalendarIds,
+    cookieBundlePath: existing.COOKIE_BUNDLE_PATH || values.env.COOKIE_BUNDLE_PATH || path.resolve(DEFAULT_COOKIE_BUNDLE_PATH),
+    protonBaseUrl: existing.PROTON_BASE_URL || values.env.PROTON_BASE_URL || DEFAULT_PROTON_BASE_URL,
+    apiBaseUrl: existing.PC_API_BASE_URL || values.apiBaseUrl,
+  });
+}
+
+async function readServerEnvFile(filePath) {
+  let raw;
+  try {
+    raw = await readFile(filePath, "utf8");
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      throw new CliError("CONFIG_ERROR", `Server env file not found: ${filePath}`);
+    }
+    throw error;
+  }
+
+  const values = {};
+  for (const line of raw.split("\n")) {
+    const match = line.match(/^export\s+([A-Z0-9_]+)=(.*)$/);
+    if (!match) {
+      continue;
+    }
+    values[match[1]] = parseEnvValue(match[2]);
+  }
+  return values;
+}
+
+function parseEnvValue(raw) {
+  const value = raw.trim();
+  if (value.startsWith('"') && value.endsWith('"')) {
+    return value.slice(1, -1).replaceAll('\\"', '"');
+  }
+  return value;
 }
 
 function buildServerCalendarEnv(values) {
