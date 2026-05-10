@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { randomBytes } from "node:crypto";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 
@@ -23,7 +24,7 @@ if (!configuredCalendarId) {
   throw new Error("PROTON_TEST_CALENDAR_ID is required or bootstrap must discover defaultCalendarId");
 }
 
-const apiBearerToken = String(process.env.API_BEARER_TOKEN || "live-canary-token").trim();
+const apiBearerToken = readApiBearerToken();
 const protonBaseUrl = String(process.env.PROTON_BASE_URL || "https://calendar.proton.me").trim();
 const apiBaseUrl = String(process.env.PC_API_BASE_URL || "http://127.0.0.1:8787").trim();
 
@@ -56,4 +57,9 @@ console.log(JSON.stringify({
 
 function quote(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;
+}
+
+function readApiBearerToken() {
+  const configured = String(process.env.API_BEARER_TOKEN || "").trim();
+  return configured || randomBytes(32).toString("base64url");
 }
