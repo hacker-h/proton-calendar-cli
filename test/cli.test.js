@@ -310,6 +310,41 @@ test("login rejects accounts with no calendars", async () => {
   assert.equal(JSON.parse(stderr.value()).error.code, "LOGIN_FAILED");
 });
 
+test("login surfaces Proton rate limits with Retry-After details", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-login-rate-limit-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  await writeLoginCookieBundle(cookieBundlePath);
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["login", "--cookie-bundle", cookieBundlePath], {
+    env: {},
+    bootstrapRunner: async () => {},
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      return jsonResponse(429, { Code: 12087, Error: "rate limited" }, [["Retry-After", "3"]]);
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.deepEqual(JSON.parse(stderr.value()), {
+    error: {
+      code: "RATE_LIMITED",
+      message: "Proton rate limit exceeded",
+      details: {
+        status: 429,
+        retryable: true,
+        retryAfterMs: 3000,
+        retryAfterSeconds: 3,
+      },
+    },
+  });
+});
+
 test("authorize alias works for login", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-authorize-test-"));
   const cookieBundlePath = path.join(tmpDir, "cookies.json");
