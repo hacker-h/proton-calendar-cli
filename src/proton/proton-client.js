@@ -46,6 +46,7 @@ export class ProtonCalendarClient {
       });
 
     this.cachedUID = "";
+    this.cachedUIDGeneration = null;
     this.cachedContext = null;
   }
 
@@ -419,8 +420,12 @@ export class ProtonCalendarClient {
   }
 
   async #getUID() {
-    if (this.cachedUID) {
+    const sessionGeneration = await this.#getSessionGeneration();
+    if (this.cachedUID && this.cachedUIDGeneration === sessionGeneration) {
       return this.cachedUID;
+    }
+    if (this.cachedUID) {
+      this.#resetAuthCaches();
     }
 
     const candidates = await this.sessionStore.getUIDCandidates();
@@ -432,6 +437,7 @@ export class ProtonCalendarClient {
       try {
         await this.#requestJSON("GET", "/api/core/v4/users", { uid: candidate, allowAuthFailure: false });
         this.cachedUID = candidate;
+        this.cachedUIDGeneration = sessionGeneration;
         return candidate;
       } catch {
         continue;
@@ -442,7 +448,11 @@ export class ProtonCalendarClient {
   }
 
   async #getContext(calendarId) {
-    if (this.cachedContext?.calendarId === calendarId) {
+    const sessionGeneration = await this.#getSessionGeneration();
+    if (
+      this.cachedContext?.calendarId === calendarId &&
+      (sessionGeneration === null || this.cachedContext.sessionGeneration === sessionGeneration)
+    ) {
       return this.cachedContext;
     }
 
@@ -539,6 +549,7 @@ export class ProtonCalendarClient {
     this.cachedContext = {
       uid,
       calendarId,
+      sessionGeneration,
       memberId: member.ID,
       addressEmail: address.Email,
       addressPrivateKey,
@@ -914,7 +925,15 @@ export class ProtonCalendarClient {
 
   #resetAuthCaches() {
     this.cachedUID = "";
+    this.cachedUIDGeneration = null;
     this.cachedContext = null;
+  }
+
+  async #getSessionGeneration() {
+    if (typeof this.sessionStore.getGeneration !== "function") {
+      return null;
+    }
+    return await this.sessionStore.getGeneration();
   }
 }
 
