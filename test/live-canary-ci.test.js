@@ -50,6 +50,16 @@ test("parseLiveQuarantine requires owner reason and future expiry", () => {
           expiresAt: "2026-05-17T00:00:00.000Z",
           issue: "https://github.com/hacker-h/proton-calendar-cli/issues/22",
         },
+        {
+          id: "unsafe",
+          suite: "live-api",
+          check: "pagination",
+          failureClass: "project_regression_or_proton_drift",
+          owner: "calendar-maintainers",
+          reason: "API_BEARER_TOKEN=secret must not appear in reports",
+          expiresAt: "2026-05-17T00:00:00.000Z",
+          issue: "https://github.com/hacker-h/proton-calendar-cli/issues/22",
+        },
       ],
     }),
     now
@@ -57,8 +67,13 @@ test("parseLiveQuarantine requires owner reason and future expiry", () => {
 
   assert.equal(parsed.active.length, 1);
   assert.equal(parsed.active[0].id, "ui-drift-2026-05");
-  assert.deepEqual(parsed.invalid.map((entry) => entry.reason), ["expired quarantine", "missing required quarantine fields"]);
+  assert.deepEqual(parsed.invalid.map((entry) => entry.reason), [
+    "expired quarantine",
+    "missing required quarantine fields",
+    "unsafe quarantine metadata",
+  ]);
   assert.deepEqual(parsed.invalid[1].missing, ["owner"]);
+  assert.equal(JSON.stringify(parsed).includes("API_BEARER_TOKEN"), false);
 });
 
 test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible", () => {
@@ -96,6 +111,10 @@ test("classifyLiveCanaryFailure maps bootstrap exits and keeps failures visible"
   const liveTests = classifyLiveCanaryFailure({ stage: "live-tests", exitCode: 1 });
   assert.equal(liveTests.failureClass, "project_regression_or_proton_drift");
   assert.equal(liveTests.failureSuppressed, false);
+
+  const browserInstall = classifyLiveCanaryFailure({ stage: "browser-install", exitCode: 1, command: "pnpm exec playwright install chromium --with-deps" });
+  assert.equal(browserInstall.failureClass, "runner_browser");
+  assert.equal(browserInstall.quarantineEligible, true);
 });
 
 test("write-live-env creates runnable API and live-test environment", async () => {

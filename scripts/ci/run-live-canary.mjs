@@ -4,6 +4,7 @@ import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
 import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
+import { assertSafeDiagnostics } from "./bootstrap-proton-session.mjs";
 
 const DEFAULT_ENV_PATH = "secrets/ci-live.env";
 const DEFAULT_TRIAGE_PATH = "reports/live-triage.json";
@@ -16,7 +17,12 @@ if (import.meta.url === `file://${process.argv[1]}`) {
       active: [],
       invalid: [{ reason: quarantineError?.message || String(quarantineError) }],
     }));
-    const triage = classifyLiveCanaryFailure(error, { quarantine });
+    let triage = classifyLiveCanaryFailure(error, { quarantine });
+    try {
+      assertSafeLiveTriage(triage);
+    } catch {
+      triage = classifyLiveCanaryFailure({ stage: "triage-sanitizer", exitCode: 80 }, { quarantine: { active: [], invalid: [] } });
+    }
     await writeLiveTriageReport(triage, process.env).catch((reportError) => {
       console.error(`Unable to write live triage report: ${reportError?.message || String(reportError)}`);
     });
@@ -38,6 +44,7 @@ export async function main(env = process.env) {
     console.log(JSON.stringify({ data: { liveQuarantine: quarantine } }, null, 2));
   }
 
+  await runStage("browser-install", () => runCommand(pnpmCommand(), ["exec", "playwright", "install", "chromium", "--with-deps"], { env }));
   await runStage("bootstrap", () => runCommand(process.execPath, ["scripts/ci/bootstrap-proton-session.mjs"], { env }));
   await runStage("write-live-env", () => runCommand(process.execPath, ["scripts/ci/write-live-env.mjs"], { env }));
 
@@ -98,6 +105,10 @@ export function parseLiveQuarantine(raw, now = new Date()) {
       (key) => !normalized[key]
     );
     const expiresAtMs = Date.parse(normalized.expiresAt);
+    if (!isSafeQuarantineEntry(normalized)) {
+      invalid.push({ id: normalized.id, reason: "unsafe quarantine metadata" });
+      continue;
+    }
 
     if (missing.length > 0) {
       invalid.push({ ...normalized, reason: "missing required quarantine fields", missing });
@@ -227,6 +238,7 @@ async function readLiveQuarantine(filePath) {
 }
 
 async function writeLiveTriageReport(triage, env) {
+  assertSafeLiveTriage(triage);
   const reportPath = path.resolve(env.CI_LIVE_TRIAGE_PATH || DEFAULT_TRIAGE_PATH);
   await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify({ data: triage }, null, 2)}\n`, { mode: 0o600 });
@@ -253,7 +265,9 @@ function classifyBootstrapExitCode(exitCode) {
 
 function classifyStage(stage) {
   const map = {
+    "browser-install": ["runner_browser", "Check Playwright/Chromium installation and runner browser dependencies.", true],
     "write-live-env": ["live_env_setup", "Check live env generation inputs and cookie probe metadata.", false],
+    "triage-sanitizer": ["security_sanitizer", "Review sanitizer failure before publishing logs or artifacts.", false],
     "api-start": ["runner_or_api_start", "Check local API startup logs, port availability, and generated live env.", true],
     "live-tests": ["project_regression_or_proton_drift", "Inspect failing live test, affected endpoint, and last passing run.", true],
   };
@@ -276,6 +290,18 @@ function normalizeQuarantineEntry(entry) {
     expiresAt: String(entry?.expiresAt || "").trim(),
     issue: String(entry?.issue || "").trim(),
   };
+}
+
+function isSafeQuarantineEntry(entry) {
+  const serialized = JSON.stringify(entry);
+  return !/API_BEARER_TOKEN|PC_API_TOKEN|COOKIE_BUNDLE_PATH|ci-live\.env|Bearer\s+[A-Za-z0-9._-]+|AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|"cookie"\s*:/i.test(serialized);
+}
+
+function assertSafeLiveTriage(triage) {
+  assertSafeDiagnostics(triage);
+  if (!isSafeQuarantineEntry(triage)) {
+    throw new Error("live triage report contains unsafe metadata");
+  }
 }
 
 class LiveCommandError extends Error {

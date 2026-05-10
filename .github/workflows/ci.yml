@@ -145,10 +145,6 @@ jobs:
             echo "enabled=true" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Install Chromium for Playwright
-        if: steps.live-secrets.outputs.enabled == 'true'
-        run: pnpm exec playwright install chromium --with-deps
-
       - name: Bootstrap Proton session
         if: steps.live-secrets.outputs.enabled == 'true'
         env:
