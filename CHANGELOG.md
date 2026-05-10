@@ -1,3 +1,12 @@
+## [1.3.3](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.2...v1.3.3) (2026-05-10)
+
+
+### Bug Fixes
+
+* fail closed on CLI listing caps ([3367f7f](https://github.com/hacker-h/proton-calendar-cli/commit/3367f7fb38432a7c046336e155066fadd8cebcbd))
+* fail closed on Proton event page caps ([c4aaa5f](https://github.com/hacker-h/proton-calendar-cli/commit/c4aaa5fe51e88a60d3870b1adcdd0ee2f26af55b))
+* fail closed on service listing caps ([0b34cef](https://github.com/hacker-h/proton-calendar-cli/commit/0b34cef9d497afdaefcec8a6e5fc81741b38e8e6))
+
 ## [1.3.2](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.1...v1.3.2) (2026-05-10)
 
 
