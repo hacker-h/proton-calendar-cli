@@ -19,7 +19,7 @@ try {
   await assertNoProjectNpmCredentials();
 
   const env = await createNoCredentialNpmEnv();
-  const pack = await runNpmJson(["pack", "--dry-run", "--json"], env);
+  const pack = await runNpmJson(["pack", "--dry-run", "--json", "--ignore-scripts"], env);
   assertPackDryRun(pack);
 
   const publish = await runNpmJson(["publish", "--dry-run", "--json", "--ignore-scripts", "--access", "public"], env);
@@ -35,7 +35,9 @@ async function assertPackageMetadata() {
   assertMatches(packageJson.version, /^\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?$/, "package version must be semver-like");
   assertEqual(packageJson.license, "MIT", "package license must be MIT");
   assertEqual(packageJson.type, "module", "package must remain ESM");
-  assertEqual(packageJson.private, undefined, "package must not be marked private when checking publish readiness");
+  if (packageJson.private === true) {
+    throw new Error("package must not be marked private when checking publish readiness");
+  }
   assertNonEmptyString(packageJson.description, "package description is required for npm metadata");
   assertNonEmptyString(packageJson.homepage, "package homepage is required for npm metadata");
   assertNonEmptyString(packageJson.repository?.url, "package repository.url is required for npm metadata");
@@ -93,7 +95,7 @@ async function assertNoProjectNpmCredentials() {
     throw error;
   }
 
-  if (/(^|\n)\s*(?:\/\/.*:)?_(?:authToken|auth)\s*=|NODE_AUTH_TOKEN|NPM_TOKEN/i.test(npmrc)) {
+  if (/(^|\n)\s*(?:\/\/.*:)?(?:_(?:authToken|auth|password)|username|password)\s*=|NODE_AUTH_TOKEN|NPM_TOKEN/i.test(npmrc)) {
     throw new Error("Project .npmrc must not contain npm publish credentials");
   }
 }
@@ -117,7 +119,7 @@ async function createNoCredentialNpmEnv() {
   };
 
   for (const key of Object.keys(env)) {
-    if (/^(?:NPM_TOKEN|NODE_AUTH_TOKEN)$/i.test(key) || /^npm_config_(?:_|.*auth|token)/i.test(key)) {
+    if (/^(?:NPM_TOKEN|NODE_AUTH_TOKEN)$/i.test(key) || /^npm_config_(?:_|.*auth|.*token|username|password|_password)/i.test(key)) {
       delete env[key];
     }
   }

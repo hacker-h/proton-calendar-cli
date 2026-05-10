@@ -65,6 +65,9 @@ jobs:
       - name: Run package/bin smoke
         run: pnpm run smoke:package
 
+      - name: Run npm publish readiness
+        run: pnpm run readiness:npm-publish
+
   cross-platform-smoke:
     name: Package smoke (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
