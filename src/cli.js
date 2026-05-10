@@ -16,6 +16,7 @@ const DEFAULT_SERVER_ENV_PATH = "secrets/pc-server.env";
 const DEFAULT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies.json";
 const DEFAULT_PROTON_BASE_URL = "https://calendar.proton.me";
 const DEFAULT_TIMEOUT_MS = 15000;
+const LIST_PAGE_LIMIT = 100;
 const CLEARABLE_FIELDS = new Set(["description", "location"]);
 const VALID_TIMEZONES = new Set(["UTC", ...Intl.supportedValuesOf("timeZone")]);
 
@@ -1414,8 +1415,9 @@ async function runListCommand(args, context) {
   let cursor = null;
   let nextCursor = null;
   let pages = 0;
+  let maxResultsSatisfied = false;
 
-  while (pages < 100) {
+  while (pages < LIST_PAGE_LIMIT) {
     const response = await requestJson(context.fetchImpl, {
       apiBaseUrl: context.apiBaseUrl,
       apiToken: context.apiToken,
@@ -1428,6 +1430,7 @@ async function runListCommand(args, context) {
         ...(cursor ? { cursor } : {}),
       },
     });
+    pages += 1;
 
     const rows = Array.isArray(response?.data?.events) ? response.data.events : [];
     events.push(...rows);
@@ -1437,11 +1440,20 @@ async function runListCommand(args, context) {
       break;
     }
     if (parsed.maxResults !== null && events.filter((event) => matchesListFilters(event, parsed)).length >= parsed.maxResults) {
+      maxResultsSatisfied = true;
       break;
     }
 
     cursor = nextCursor;
-    pages += 1;
+  }
+
+  if (nextCursor && !maxResultsSatisfied) {
+    throw new CliError("EVENT_LIST_PAGE_LIMIT", "Event listing exceeded the page limit", {
+      range: parsed.range,
+      pageLimit: LIST_PAGE_LIMIT,
+      pageSize: parsed.pageSize,
+      nextCursor,
+    });
   }
 
   const filteredEvents = events.filter((event) => matchesListFilters(event, parsed));

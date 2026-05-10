@@ -1366,6 +1366,48 @@ test("ls applies combined protected and text filters before limit across paginat
   assert.equal(payload.data.events[0].id, "evt-3");
 });
 
+test("ls fails when API pagination cap would truncate results", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["ls", "--from", "2026-03-01", "--to", "2026-04-01"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    now: () => Date.parse("2026-03-11T15:00:00.000Z"),
+    fetchImpl: async (url) => {
+      const parsed = new URL(String(url));
+      requests.push(parsed);
+      return jsonResponse(200, {
+        data: {
+          events: [],
+          nextCursor: `cursor-${requests.length}`,
+        },
+      });
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(stdout.value(), "");
+  assert.equal(requests.length, 100);
+  assert.equal(requests[99].searchParams.get("cursor"), "cursor-99");
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "EVENT_LIST_PAGE_LIMIT");
+  assert.deepEqual(payload.error.details, {
+    range: {
+      start: "2026-03-01T00:00:00.000Z",
+      end: "2026-04-02T00:00:00.000Z",
+    },
+    pageLimit: 100,
+    pageSize: 200,
+    nextCursor: "cursor-100",
+  });
+});
+
 test("edit sends differential patch and clear fields", async () => {
   const requests = [];
   const stdout = createWriter();
