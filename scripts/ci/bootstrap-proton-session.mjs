@@ -1,9 +1,9 @@
 #!/usr/bin/env node
 
-import { chmod, mkdir, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
+import { withFileLock, writeSecretFileAtomic } from "../../src/atomic-secret-file.js";
 import { DEFAULT_PROTON_APP_VERSION } from "../../src/constants.js";
 
 const DEFAULT_OUTPUT_FILE = "secrets/proton-cookies.json";
@@ -59,9 +59,7 @@ async function main() {
     await waitForAuthenticatedCalendar(page, options.postLoginTimeoutMs);
 
     const payload = await exportBundle(context, page, options);
-    await mkdir(path.dirname(options.outputFile), { recursive: true });
-    await writeFile(options.outputFile, `${JSON.stringify(payload, null, 2)}\n`, { mode: 0o600 });
-    await chmod(options.outputFile, 0o600);
+    await withFileLock(options.outputFile, () => writeSecretFileAtomic(options.outputFile, `${JSON.stringify(payload, null, 2)}\n`));
 
     const summary = sanitizeSuccessSummary(payload, options);
     assertSafeDiagnostics(summary);
