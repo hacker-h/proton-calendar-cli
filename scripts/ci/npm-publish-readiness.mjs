@@ -126,12 +126,21 @@ async function createNoCredentialNpmEnv() {
 }
 
 async function runNpmJson(args, env) {
-  const { stdout } = await execFileAsync("npm", args, {
+  const { stdout } = await execFileAsync(commandName("npm"), args, {
     cwd: repoRoot,
     env,
     maxBuffer: 1024 * 1024 * 10,
+    shell: process.platform === "win32",
+    windowsHide: true,
   });
   return JSON.parse(stdout);
+}
+
+function commandName(file) {
+  if (process.platform !== "win32" || path.isAbsolute(file) || file.endsWith(".cmd")) {
+    return file;
+  }
+  return `${file}.cmd`;
 }
 
 function assertPackDryRun(result) {
