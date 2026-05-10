@@ -49,9 +49,10 @@ pc logout
 
 | Command | Purpose | Example |
 | --- | --- | --- |
-| `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --target-calendar cal_123` |
+| `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --default-calendar cal_123` |
 | `pc logout` | Remove local CLI/server/cookie secret files and relogin sidecars | `pc logout` |
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
+| `pc calendars` | List discovered calendars and configured defaults | `pc calendars -o table` |
 | `pc ls` | List events; defaults to current ISO week | `pc ls w++ --title review` |
 | `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
 | `pc edit` | PATCH-style update; only provided fields are sent | `pc edit evt-1 title="Updated" --clear description` |
@@ -128,6 +129,8 @@ export TARGET_CALENDAR_ID=cal_123
 # or: export ALLOWED_CALENDAR_IDS=cal_123,cal_456
 # optional: export DEFAULT_CALENDAR_ID=cal_123
 ```
+
+Run `pc calendars` after the API server is running to see the calendars visible to the saved Proton session and which one is configured as default or target. `pc login --default-calendar cal_123` writes `DEFAULT_CALENDAR_ID` and allows all calendars discovered during login. `pc login --target-calendar cal_123` preserves the hard-lock mode for automations that must never mutate another calendar.
 
 `TARGET_CALENDAR_ID` hard-locks all requests to one calendar. Without it, `ALLOWED_CALENDAR_IDS` controls explicit calendar routes and `DEFAULT_CALENDAR_ID` is used for plain event commands.
 
