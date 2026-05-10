@@ -1,3 +1,10 @@
+# [1.4.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.5...v1.4.0) (2026-05-10)
+
+
+### Features
+
+* add deterministic agenda windows ([65cda21](https://github.com/hacker-h/proton-calendar-cli/commit/65cda217c7a8f1940cc414b2c8514429dbf8a5ed))
+
 ## [1.3.5](https://github.com/hacker-h/proton-calendar-cli/compare/v1.3.4...v1.3.5) (2026-05-10)
 
 
