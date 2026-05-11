@@ -37,6 +37,7 @@ const _apiListSuccessPayload = {
         location: "Room A",
         protected: false,
         recurrence: _normalizedRecurrencePayload,
+        notifications: [{ Type: 1, Trigger: "-PT10M" }],
         seriesId: null,
         occurrenceStart: null,
         createdAt: null,
@@ -76,12 +77,14 @@ const _eventCreatePayload = {
   end: "2026-03-10T10:30:00.000Z",
   timezone: "UTC",
   protected: false,
+  notifications: [{ Type: 1, Trigger: "-PT10M" }],
 };
 
 /** @satisfies {EventPatchPayload} */
 const _eventPatchPayload = {
   title: "Updated design review",
   recurrence: null,
+  notifications: null,
 };
 
 /** @satisfies {ProtonEventResponse} */
@@ -93,6 +96,7 @@ const _protonEventResponse = {
   StartTimezone: "UTC",
   SharedEvents: [],
   SharedKeyPacket: "packet",
+  Notifications: [{ Type: 1, Trigger: "-PT10M" }],
 };
 
 /** @satisfies {ApiErrorPayload} */
