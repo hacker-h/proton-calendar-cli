@@ -66,9 +66,10 @@ export async function runPcCli(argv, options = {}) {
       throw new CliError("UNKNOWN_COMMAND", `Unknown command: ${command}`);
     }
 
-    const localConfig = await readLocalConfig(env);
-    const apiBaseUrl = readBaseUrl(env, localConfig);
-    const apiToken = readToken(env, localConfig);
+    const dryRunMutation = (apiCommand === "create" || apiCommand === "edit") && rest.includes("--dry-run");
+    const localConfig = dryRunMutation ? {} : await readLocalConfig(env);
+    const apiBaseUrl = dryRunMutation ? null : readBaseUrl(env, localConfig);
+    const apiToken = dryRunMutation ? null : readToken(env, localConfig);
 
     if (apiCommand === "list") {
       const result = await runListCommand(rest, { apiBaseUrl, apiToken, fetchImpl, now });

@@ -26,6 +26,13 @@ export async function runCreateCommand(args, context) {
     ? `/v1/calendars/${encodeURIComponent(parsed.calendarId)}/events`
     : "/v1/events";
 
+  if (parsed.dryRun) {
+    return {
+      output: "json",
+      payload: buildDryRunPayload("create", "POST", path, {}, parsed.patch),
+    };
+  }
+
   const response = await requestJson(context.fetchImpl, {
     apiBaseUrl: context.apiBaseUrl,
     apiToken: context.apiToken,
@@ -54,15 +61,24 @@ export async function runEditCommand(args, context) {
     ? `/v1/calendars/${encodeURIComponent(parsed.calendarId)}/events/${encodeURIComponent(parsed.eventId)}`
     : `/v1/events/${encodeURIComponent(parsed.eventId)}`;
 
+  const query = {
+    ...(parsed.scope ? { scope: parsed.scope } : {}),
+    ...(parsed.occurrenceStart ? { occurrenceStart: parsed.occurrenceStart } : {}),
+  };
+
+  if (parsed.dryRun) {
+    return {
+      output: "json",
+      payload: buildDryRunPayload("update", "PATCH", path, query, parsed.patch),
+    };
+  }
+
   const response = await requestJson(context.fetchImpl, {
     apiBaseUrl: context.apiBaseUrl,
     apiToken: context.apiToken,
     method: "PATCH",
     path,
-    query: {
-      ...(parsed.scope ? { scope: parsed.scope } : {}),
-      ...(parsed.occurrenceStart ? { occurrenceStart: parsed.occurrenceStart } : {}),
-    },
+    query,
     body: parsed.patch,
   });
 
@@ -109,6 +125,7 @@ async function parseMutationArgs(args, options = {}) {
     patchInput: null,
     clearFields: [],
     assignments: [],
+    dryRun: false,
   };
 
   let index = 0;
@@ -150,6 +167,10 @@ async function parseMutationArgs(args, options = {}) {
       state.clearFields.push(normalizeClearField(requireValue(args, ++i, token)));
       continue;
     }
+    if (token === "--dry-run") {
+      state.dryRun = true;
+      continue;
+    }
     if (token.startsWith("-")) {
       throw new CliError("INVALID_ARGS", `Unknown option: ${token}`);
     }
@@ -185,7 +206,22 @@ async function parseMutationArgs(args, options = {}) {
     eventId: state.eventId,
     scope: state.scope,
     occurrenceStart: state.occurrenceStart,
+    dryRun: state.dryRun,
     patch,
+  };
+}
+
+
+function buildDryRunPayload(operation, method, path, query, payload) {
+  return {
+    data: {
+      dryRun: true,
+      operation,
+      method,
+      path,
+      query,
+      payload,
+    },
   };
 }
 
