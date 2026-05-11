@@ -11,15 +11,29 @@
           "data": {
             "type": "object",
             "keys": {
-              "authenticated": { "type": "boolean" },
-              "targetCalendarId": { "type": "unknown" },
-              "defaultCalendarId": { "type": "unknown" },
+              "authenticated": {
+                "type": "boolean"
+              },
+              "targetCalendarId": {
+                "type": "unknown"
+              },
+              "defaultCalendarId": {
+                "type": "unknown"
+              },
               "allowedCalendarIds": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               },
-              "session": { "type": "object", "keys": {} },
-              "upstream": { "type": "object", "keys": {} }
+              "session": {
+                "type": "object",
+                "keys": {}
+              },
+              "upstream": {
+                "type": "object",
+                "keys": {}
+              }
             }
           }
         }
@@ -41,21 +55,41 @@
                 "items": {
                   "type": "object",
                   "keys": {
-                    "id": { "type": "string" },
-                    "name": { "type": "string" },
-                    "color": { "type": "unknown" },
-                    "permissions": { "type": "unknown" },
-                    "default": { "type": "boolean" },
-                    "target": { "type": "boolean" },
-                    "allowed": { "type": "boolean" }
+                    "id": {
+                      "type": "string"
+                    },
+                    "name": {
+                      "type": "string"
+                    },
+                    "color": {
+                      "type": "unknown"
+                    },
+                    "permissions": {
+                      "type": "unknown"
+                    },
+                    "default": {
+                      "type": "boolean"
+                    },
+                    "target": {
+                      "type": "boolean"
+                    },
+                    "allowed": {
+                      "type": "boolean"
+                    }
                   }
                 }
               },
-              "targetCalendarId": { "type": "unknown" },
-              "defaultCalendarId": { "type": "unknown" },
+              "targetCalendarId": {
+                "type": "unknown"
+              },
+              "defaultCalendarId": {
+                "type": "unknown"
+              },
               "allowedCalendarIds": {
                 "type": "array",
-                "items": { "type": "string" }
+                "items": {
+                  "type": "string"
+                }
               }
             }
           }
@@ -78,26 +112,61 @@
                 "items": {
                   "type": "object",
                   "keys": {
-                    "id": { "type": "string" },
-                    "calendarId": { "type": "string" },
-                    "title": { "type": "string" },
-                    "description": { "type": "string" },
-                    "start": { "type": "string" },
-                    "end": { "type": "string" },
-                    "allDay": { "type": "boolean" },
-                    "timezone": { "type": "string" },
-                    "location": { "type": "string" },
-                    "protected": { "type": "boolean" },
-                    "recurrence": { "type": "unknown" },
-                    "seriesId": { "type": "unknown" },
-                    "occurrenceStart": { "type": "unknown" },
-                    "isRecurring": { "type": "boolean" },
-                    "createdAt": { "type": "unknown" },
-                    "updatedAt": { "type": "unknown" }
+                    "id": {
+                      "type": "string"
+                    },
+                    "calendarId": {
+                      "type": "string"
+                    },
+                    "title": {
+                      "type": "string"
+                    },
+                    "description": {
+                      "type": "string"
+                    },
+                    "start": {
+                      "type": "string"
+                    },
+                    "end": {
+                      "type": "string"
+                    },
+                    "allDay": {
+                      "type": "boolean"
+                    },
+                    "timezone": {
+                      "type": "string"
+                    },
+                    "location": {
+                      "type": "string"
+                    },
+                    "protected": {
+                      "type": "boolean"
+                    },
+                    "recurrence": {
+                      "type": "unknown"
+                    },
+                    "seriesId": {
+                      "type": "unknown"
+                    },
+                    "occurrenceStart": {
+                      "type": "unknown"
+                    },
+                    "isRecurring": {
+                      "type": "boolean"
+                    },
+                    "createdAt": {
+                      "type": "unknown"
+                    },
+                    "updatedAt": {
+                      "type": "unknown"
+                    },
+                    "notifications": null
                   }
                 }
               },
-              "nextCursor": { "type": "unknown" }
+              "nextCursor": {
+                "type": "unknown"
+              }
             }
           }
         }
