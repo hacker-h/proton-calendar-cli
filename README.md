@@ -104,6 +104,7 @@ Notes:
 - Output defaults to JSON. Use `-o table` for human-readable list output.
 - `pc edit` is PATCH-style: omitted fields are not sent.
 - `pc edit --clear` currently supports `description`, `location`, and `notifications`.
+- `pc new --dry-run` and `pc edit --dry-run` validate arguments and print the JSON request preview without reading local API config or calling the API. Edit dry-runs preview the differential patch only; they do not fetch the existing event or verify that it exists.
 - Supported recurrence frequencies are `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY`.
 - Recurrence expansion evaluates at most 50,000 candidates by default; set `RECURRENCE_MAX_ITERATIONS` on the API server to tune that safety cap. If the cap is exhausted, the API returns `RECURRENCE_ITERATION_LIMIT` instead of a partial recurrence list.
 
