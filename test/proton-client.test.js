@@ -837,6 +837,7 @@ test("event mutations send idempotency keys to Proton sync requests", async () =
       start: "2026-03-10T10:00:00.000Z",
       end: "2026-03-10T10:30:00.000Z",
       timezone: "UTC",
+      notifications: [{ Type: 1, Trigger: "-PT10M" }],
     },
     idempotencyKey: "create-key",
   });
@@ -844,7 +845,7 @@ test("event mutations send idempotency keys to Proton sync requests", async () =
   await client.updateEvent({
     calendarId: "cal-1",
     eventId: "evt-1",
-    patch: { title: "Update with key" },
+    patch: { title: "Update with key", notifications: null },
     idempotencyKey: "update-key",
   });
 
@@ -865,6 +866,11 @@ test("event mutations send idempotency keys to Proton sync requests", async () =
       .map((request) => request.headers["X-Idempotency-Key"]),
     ["create-key", "update-key", "delete-key", undefined]
   );
+  const syncBodies = requests
+    .filter((request) => request.pathname === "/api/calendar/v1/cal-1/events/sync")
+    .map((request) => request.body.Events[0].Event);
+  assert.deepEqual(syncBodies[0].Notifications, [{ Type: 1, Trigger: "-PT10M" }]);
+  assert.equal(syncBodies[1].Notifications, null);
 });
 
 test("buildSharedParts keeps UTC timestamps for UTC events", () => {
@@ -1010,6 +1016,7 @@ test("buildCreateSyncRequestBody defaults to organizer permissions", () => {
     memberId: "member-1",
     sharedKeyPacket: "packet",
     sharedEventContent: [{ Type: 2, Data: "signed" }],
+    notifications: [{ Type: 1, Trigger: "-PT10M" }],
   });
 
   assert.equal(body.MemberID, "member-1");
@@ -1018,6 +1025,7 @@ test("buildCreateSyncRequestBody defaults to organizer permissions", () => {
   assert.equal(body.Events[0].Event.Permissions, 3);
   assert.equal(body.Events[0].Event.IsOrganizer, 1);
   assert.equal(body.Events[0].Event.SharedKeyPacket, "packet");
+  assert.deepEqual(body.Events[0].Event.Notifications, [{ Type: 1, Trigger: "-PT10M" }]);
   assert.equal(Object.hasOwn(body.Events[0].Event, "CalendarKeyPacket"), false);
   assert.equal(Object.hasOwn(body.Events[0].Event, "CalendarEventContent"), false);
 });
@@ -1240,7 +1248,7 @@ function buildRawSyncEvent(syncEvent, previousEvent) {
     EndTimezone: "UTC",
     CreateTime: 1773000000,
     ModifyTime: 1773000001,
-    Notifications: null,
+    Notifications: Object.hasOwn(syncEvent, "Notifications") ? syncEvent.Notifications : (previousEvent?.Notifications ?? null),
     Color: null,
     SharedKeyPacket: syncEvent.SharedKeyPacket || previousEvent?.SharedKeyPacket,
     SharedEvents: sharedEvents,

@@ -323,6 +323,45 @@ test("mutation routes preserve idempotency keys and omit missing keys", async ()
   }
 });
 
+test("create edit and list preserve event notifications", async () => {
+  const setup = await createFixture();
+  try {
+    const notifications = [{ Type: 1, Trigger: "-PT10M" }];
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Reminder create",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+      notifications,
+    });
+
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body.data.notifications, notifications);
+
+    const renamed = await apiRequest(setup, "PATCH", `/v1/events/${created.body.data.id}`, {
+      title: "Reminder renamed",
+    });
+    assert.equal(renamed.status, 200);
+    assert.deepEqual(renamed.body.data.notifications, notifications);
+
+    const cleared = await apiRequest(setup, "PATCH", `/v1/events/${created.body.data.id}`, {
+      notifications: null,
+    });
+    assert.equal(cleared.status, 200);
+    assert.equal(cleared.body.data.notifications, null);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-03-10T00:00:00.000Z&end=2026-03-11T00:00:00.000Z"
+    );
+    assert.equal(listed.status, 200);
+    assert.equal(listed.body.data.events[0].notifications, null);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports recurrence and expands instances in list responses", async () => {
   const setup = await createFixture();
   try {
@@ -1702,6 +1741,7 @@ function createMockProtonClient(options) {
         timezone: event.timezone,
         location: event.location || "",
         protected: event.protected ?? false,
+        notifications: cloneNotifications(event.notifications),
         recurrence: cloneRecurrence(event.recurrence),
         seriesId: null,
         occurrenceStart: null,
@@ -1911,8 +1951,15 @@ function applyPatch(event, patch) {
   if (patch.protected !== undefined) {
     updated.protected = patch.protected;
   }
+  if (patch.notifications !== undefined) {
+    updated.notifications = cloneNotifications(patch.notifications);
+  }
 
   return updated;
+}
+
+function cloneNotifications(notifications) {
+  return notifications === undefined ? null : JSON.parse(JSON.stringify(notifications));
 }
 
 function ensureExDate(event, occurrenceStart) {
