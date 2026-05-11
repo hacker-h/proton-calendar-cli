@@ -5,7 +5,7 @@ export const DEFAULT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies.json";
 export const DEFAULT_PROTON_BASE_URL = "https://calendar.proton.me";
 export const DEFAULT_TIMEOUT_MS = 15000;
 export const LIST_PAGE_LIMIT = 100;
-export const CLEARABLE_FIELDS = new Set(["description", "location"]);
+export const CLEARABLE_FIELDS = new Set(["description", "location", "notifications"]);
 export const VALID_TIMEZONES = new Set(["UTC", ...Intl.supportedValuesOf("timeZone")]);
 
 export const HELP_TEXT = `pc - Proton Calendar CLI
@@ -38,7 +38,9 @@ Examples:
   pc ls --description workshop
   pc ls --location "room a"
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
+  pc new title="Reminder" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC notifications='[{"Type":1,"Trigger":"-PT10M"}]'
   pc edit evt-1 title="Updated" --clear description
+  pc edit evt-1 notifications=null
   pc edit evt-1 --scope single --at 2026-03-12T09:00:00Z location="Room B"
   pc rm evt-1 --scope series
 
@@ -82,6 +84,9 @@ List options:
   --to <date>          Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (inclusive through end of day)
   --start <datetime>   Range start; YYYY-MM-DD advances to 00:00:00Z (same as --from)
   --end <datetime>     Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (same as --to)
+
+Mutation fields:
+  notifications      Null or an array of up to 10 Proton-compatible notification objects; omitted edit fields are preserved
 
 Local config JSON (default: secrets/pc-cli.json):
   { "apiBaseUrl": "http://127.0.0.1:8787", "apiToken": "replace-me" }

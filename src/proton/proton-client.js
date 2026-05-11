@@ -148,6 +148,7 @@ export class ProtonCalendarClient {
       sharedKeyPacket: toBase64(sharedKeyPacket),
       sharedEventContent,
       protected: event.protected,
+      notifications: event.notifications,
     });
 
     const response = await syncCalendarEvents({
@@ -212,7 +213,7 @@ export class ProtonCalendarClient {
       memberId: context.memberId,
       eventId,
       sharedEventContent,
-      notifications: existing.Notifications || null,
+      notifications: patch.notifications === undefined ? (existing.Notifications || null) : patch.notifications,
       color: existing.Color || null,
       scope,
       occurrenceStart,
@@ -279,6 +280,7 @@ export class ProtonCalendarClient {
       uid: rawEvent.UID || null,
       sequence: decoded.sequence || 0,
       protected: rawEvent.IsOrganizer === 1,
+      notifications: normalizeProtonNotifications(rawEvent.Notifications),
     };
   }
 
@@ -741,4 +743,11 @@ function findPersistedSession(persistedSessions, uid) {
   }
 
   return null;
+}
+
+function normalizeProtonNotifications(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return Array.isArray(value) ? value.map((item) => ({ ...item })) : null;
 }

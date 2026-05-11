@@ -2,7 +2,9 @@
   "cases": [
     {
       "name": "list current week success",
-      "argv": ["ls"],
+      "argv": [
+        "ls"
+      ],
       "now": "2026-03-11T15:00:00.000Z",
       "apiResponse": {
         "status": 200,
@@ -15,7 +17,8 @@
                 "start": "2026-03-11T10:00:00.000Z",
                 "end": "2026-03-11T10:30:00.000Z",
                 "location": "Room A",
-                "protected": true
+                "protected": true,
+                "notifications": null
               }
             ],
             "nextCursor": null
@@ -42,7 +45,8 @@
                 "start": "2026-03-11T10:00:00.000Z",
                 "end": "2026-03-11T10:30:00.000Z",
                 "location": "Room A",
-                "protected": true
+                "protected": true,
+                "notifications": null
               }
             ],
             "count": 1,
@@ -76,7 +80,8 @@
             "start": "2026-03-10T10:00:00.000Z",
             "end": "2026-03-10T10:30:00.000Z",
             "timezone": "UTC",
-            "protected": false
+            "protected": false,
+            "notifications": null
           }
         }
       },
@@ -101,7 +106,8 @@
             "start": "2026-03-10T10:00:00.000Z",
             "end": "2026-03-10T10:30:00.000Z",
             "timezone": "UTC",
-            "protected": false
+            "protected": false,
+            "notifications": null
           }
         },
         "stderr": ""
@@ -109,7 +115,14 @@
     },
     {
       "name": "list protected filter success",
-      "argv": ["ls", "--protected", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--protected",
+        "--start",
+        "2026-03-10T00:00:00Z",
+        "--end",
+        "2026-03-11T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 200,
         "body": {
@@ -120,14 +133,16 @@
                 "title": "Private planning",
                 "start": "2026-03-10T09:00:00.000Z",
                 "end": "2026-03-10T09:30:00.000Z",
-                "protected": true
+                "protected": true,
+                "notifications": null
               },
               {
                 "id": "evt-public",
                 "title": "Public demo",
                 "start": "2026-03-10T11:00:00.000Z",
                 "end": "2026-03-10T11:30:00.000Z",
-                "protected": false
+                "protected": false,
+                "notifications": null
               }
             ],
             "nextCursor": null
@@ -153,7 +168,8 @@
                 "title": "Private planning",
                 "start": "2026-03-10T09:00:00.000Z",
                 "end": "2026-03-10T09:30:00.000Z",
-                "protected": true
+                "protected": true,
+                "notifications": null
               }
             ],
             "count": 1,
@@ -169,7 +185,14 @@
     },
     {
       "name": "list unprotected filter success",
-      "argv": ["ls", "--unprotected", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--unprotected",
+        "--start",
+        "2026-03-10T00:00:00Z",
+        "--end",
+        "2026-03-11T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 200,
         "body": {
@@ -180,14 +203,16 @@
                 "title": "Private planning",
                 "start": "2026-03-10T09:00:00.000Z",
                 "end": "2026-03-10T09:30:00.000Z",
-                "protected": true
+                "protected": true,
+                "notifications": null
               },
               {
                 "id": "evt-public",
                 "title": "Public demo",
                 "start": "2026-03-10T11:00:00.000Z",
                 "end": "2026-03-10T11:30:00.000Z",
-                "protected": false
+                "protected": false,
+                "notifications": null
               }
             ],
             "nextCursor": null
@@ -213,7 +238,8 @@
                 "title": "Public demo",
                 "start": "2026-03-10T11:00:00.000Z",
                 "end": "2026-03-10T11:30:00.000Z",
-                "protected": false
+                "protected": false,
+                "notifications": null
               }
             ],
             "count": 1,
@@ -229,7 +255,13 @@
     },
     {
       "name": "list recurring event success",
-      "argv": ["ls", "--start", "2026-04-06T00:00:00Z", "--end", "2026-04-13T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--start",
+        "2026-04-06T00:00:00Z",
+        "--end",
+        "2026-04-13T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 200,
         "body": {
@@ -249,11 +281,14 @@
                   "interval": 1,
                   "count": 4,
                   "until": null,
-                  "byDay": ["TU"],
+                  "byDay": [
+                    "TU"
+                  ],
                   "byMonthDay": [],
                   "weekStart": null,
                   "exDates": []
-                }
+                },
+                "notifications": null
               }
             ],
             "nextCursor": null
@@ -288,11 +323,14 @@
                   "interval": 1,
                   "count": 4,
                   "until": null,
-                  "byDay": ["TU"],
+                  "byDay": [
+                    "TU"
+                  ],
                   "byMonthDay": [],
                   "weekStart": null,
                   "exDates": []
-                }
+                },
+                "notifications": null
               }
             ],
             "count": 1,
@@ -308,7 +346,13 @@
     },
     {
       "name": "edit event success",
-      "argv": ["edit", "evt-2", "title=Updated", "--clear", "description"],
+      "argv": [
+        "edit",
+        "evt-2",
+        "title=Updated",
+        "--clear",
+        "description"
+      ],
       "apiResponse": {
         "status": 200,
         "body": {
@@ -341,7 +385,12 @@
     },
     {
       "name": "delete series success",
-      "argv": ["rm", "evt-2", "--scope", "series"],
+      "argv": [
+        "rm",
+        "evt-2",
+        "--scope",
+        "series"
+      ],
       "apiResponse": {
         "status": 200,
         "body": {
@@ -375,7 +424,11 @@
     },
     {
       "name": "invalid list flags error",
-      "argv": ["ls", "--protected", "--unprotected"],
+      "argv": [
+        "ls",
+        "--protected",
+        "--unprotected"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -389,7 +442,9 @@
     },
     {
       "name": "unknown command fails before config or API",
-      "argv": ["wat"],
+      "argv": [
+        "wat"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -403,7 +458,11 @@
     },
     {
       "name": "bad output mode fails before API",
-      "argv": ["ls", "-o", "yaml"],
+      "argv": [
+        "ls",
+        "-o",
+        "yaml"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -417,7 +476,13 @@
     },
     {
       "name": "reversed list range fails before API",
-      "argv": ["ls", "--from", "2026-07-31", "--to", "2026-07-01"],
+      "argv": [
+        "ls",
+        "--from",
+        "2026-07-31",
+        "--to",
+        "2026-07-01"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -431,7 +496,9 @@
     },
     {
       "name": "edit missing id fails before API",
-      "argv": ["edit"],
+      "argv": [
+        "edit"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -445,7 +512,9 @@
     },
     {
       "name": "delete missing id fails before API",
-      "argv": ["rm"],
+      "argv": [
+        "rm"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -459,7 +528,12 @@
     },
     {
       "name": "invalid mutation scope fails before API",
-      "argv": ["rm", "evt-1", "--scope", "nope"],
+      "argv": [
+        "rm",
+        "evt-1",
+        "--scope",
+        "nope"
+      ],
       "expected": {
         "exitCode": 2,
         "stdout": "",
@@ -473,7 +547,13 @@
     },
     {
       "name": "expired API auth error passthrough",
-      "argv": ["ls", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--start",
+        "2026-03-10T00:00:00Z",
+        "--end",
+        "2026-03-11T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 401,
         "body": {
@@ -511,7 +591,13 @@
     },
     {
       "name": "local API unavailable error",
-      "argv": ["ls", "--start", "2026-03-10T00:00:00Z", "--end", "2026-03-11T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--start",
+        "2026-03-10T00:00:00Z",
+        "--end",
+        "2026-03-11T00:00:00Z"
+      ],
       "networkError": "connect ECONNREFUSED",
       "expectedRequest": {
         "method": "GET",
@@ -538,7 +624,13 @@
     },
     {
       "name": "upstream API error passthrough",
-      "argv": ["ls", "--start", "2026-05-01T00:00:00Z", "--end", "2026-05-02T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--start",
+        "2026-05-01T00:00:00Z",
+        "--end",
+        "2026-05-02T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 502,
         "body": {
@@ -576,7 +668,13 @@
     },
     {
       "name": "unsupported private API state passthrough",
-      "argv": ["ls", "--start", "2026-05-01T00:00:00Z", "--end", "2026-05-02T00:00:00Z"],
+      "argv": [
+        "ls",
+        "--start",
+        "2026-05-01T00:00:00Z",
+        "--end",
+        "2026-05-02T00:00:00Z"
+      ],
       "apiResponse": {
         "status": 409,
         "body": {
@@ -614,7 +712,14 @@
     }
   ],
   "doctorRefreshRecovered": {
-    "argv": ["doctor", "auth", "--cookie-bundle", "<cookie-bundle>", "--proton-base-url", "https://calendar.proton.me"],
+    "argv": [
+      "doctor",
+      "auth",
+      "--cookie-bundle",
+      "<cookie-bundle>",
+      "--proton-base-url",
+      "https://calendar.proton.me"
+    ],
     "expected": {
       "exitCode": 0,
       "stdout": {
@@ -632,8 +737,13 @@
           },
           "uid": "uid-1",
           "host": "https://calendar.proton.me",
-          "uidCandidates": ["uid-1"],
-          "protonHosts": ["https://calendar.proton.me", "https://account.proton.me"],
+          "uidCandidates": [
+            "uid-1"
+          ],
+          "protonHosts": [
+            "https://calendar.proton.me",
+            "https://account.proton.me"
+          ],
           "cookieBundlePath": "<cookie-bundle>",
           "authCookies": {
             "before": [
@@ -669,7 +779,9 @@
               }
             ]
           },
-          "suggestions": ["Auth is ready for unattended calendar operations."]
+          "suggestions": [
+            "Auth is ready for unattended calendar operations."
+          ]
         }
       },
       "stderr": ""
