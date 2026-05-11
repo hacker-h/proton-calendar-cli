@@ -1,3 +1,10 @@
+# [1.6.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.5.0...v1.6.0) (2026-05-11)
+
+
+### Features
+
+* **cli:** add mutation dry-run previews ([64e0fe3](https://github.com/hacker-h/proton-calendar-cli/commit/64e0fe38ca0dde1ff785c33a9bfbf3b857518df9))
+
 # [1.5.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.6...v1.5.0) (2026-05-11)
 
 
