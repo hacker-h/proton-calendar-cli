@@ -173,7 +173,7 @@ async function parseMutationArgs(args, options = {}) {
   }
 
   for (const field of state.clearFields) {
-    patch[field] = "";
+    patch[field] = field === "notifications" ? null : "";
   }
 
   validateStringPatchValues(patch, state.clearFields);
@@ -320,7 +320,7 @@ function validateStringPatchValues(patch, clearFields) {
 function normalizeClearField(raw) {
   const field = normalizeFieldPath(raw);
   if (!CLEARABLE_FIELDS.has(field)) {
-    throw new CliError("INVALID_ARGS", `--clear only supports description/location (got ${raw})`);
+    throw new CliError("INVALID_ARGS", `--clear only supports description/location/notifications (got ${raw})`);
   }
   return field;
 }

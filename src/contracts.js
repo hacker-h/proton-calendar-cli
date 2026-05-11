@@ -63,6 +63,7 @@
  * @property {string | null | undefined} [updatedAt]
  * @property {string | null | undefined} [uid]
  * @property {number | undefined} [sequence]
+ * @property {JsonValue[] | null | undefined} [notifications]
  */
 
 /**
@@ -96,10 +97,11 @@
  * @property {boolean | undefined} [allDay]
  * @property {boolean | undefined} [protected]
  * @property {RecurrencePayload | undefined} [recurrence]
+ * @property {JsonValue[] | null | undefined} [notifications]
  */
 
 /**
- * @typedef {Partial<Omit<EventCreatePayload, "recurrence">> & { recurrence?: RecurrencePayload | null }} EventPatchPayload
+ * @typedef {Partial<Omit<EventCreatePayload, "recurrence">> & { recurrence?: RecurrencePayload | null, notifications?: JsonValue[] | null }} EventPatchPayload
  */
 
 /**
@@ -125,6 +127,7 @@
  * @property {number | undefined} [IsOrganizer]
  * @property {JsonValue[] | undefined} [SharedEvents]
  * @property {string | undefined} [SharedKeyPacket]
+ * @property {JsonValue[] | null | undefined} [Notifications]
  */
 
 export {};

@@ -11,7 +11,7 @@ const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
 });
 const PROTON_IS_ORGANIZER = 1;
 
-export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, protected: isProtected = true }) {
+export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, protected: isProtected = true, notifications = null }) {
   const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
   const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
   return {
@@ -24,7 +24,7 @@ export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEv
           IsOrganizer: isOrganizer,
           SharedKeyPacket: sharedKeyPacket,
           SharedEventContent: sharedEventContent,
-          Notifications: null,
+          Notifications: notifications,
           Color: null,
         },
       },

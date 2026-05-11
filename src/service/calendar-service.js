@@ -11,6 +11,7 @@ const ALLOWED_FIELDS = new Set([
   "location",
   "recurrence",
   "protected",
+  "notifications",
 ]);
 
 const MUTATION_SCOPES = new Set(["single", "following", "series"]);
@@ -338,6 +339,7 @@ function validateCreatePayload(payload) {
     location: optionalString(payload.location, "location", 0, 400),
     recurrence: payload.recurrence === undefined ? null : validateRecurrence(payload.recurrence),
     protected: protected_,
+    notifications: payload.notifications === undefined ? null : validateNotifications(payload.notifications),
   };
 }
 
@@ -392,6 +394,10 @@ function validatePatchPayload(payload, scope) {
         throw new ApiError(400, "INVALID_FIELD", "protected must be a boolean");
       }
       patch.protected = value;
+      continue;
+    }
+    if (key === "notifications") {
+      patch.notifications = validateNotifications(value);
       continue;
     }
     if (key === "allDay") {
@@ -469,16 +475,49 @@ function validateRecurrence(raw) {
   };
 }
 
+function validateNotifications(raw) {
+  if (raw === null) {
+    return null;
+  }
+  if (!Array.isArray(raw)) {
+    throw new ApiError(400, "INVALID_NOTIFICATIONS", "notifications must be null or an array");
+  }
+  if (raw.length > 10) {
+    throw new ApiError(400, "INVALID_NOTIFICATIONS", "notifications cannot contain more than 10 entries");
+  }
+
+  return raw.map((notification, index) => {
+    if (!notification || typeof notification !== "object" || Array.isArray(notification)) {
+      throw new ApiError(400, "INVALID_NOTIFICATIONS", `notifications[${index}] must be an object`);
+    }
+    return cloneJsonObject(notification, `notifications[${index}]`);
+  });
+}
+
+function cloneJsonObject(value, field) {
+  try {
+    return JSON.parse(JSON.stringify(value));
+  } catch {
+    throw new ApiError(400, "INVALID_NOTIFICATIONS", `${field} must be JSON-serializable`);
+  }
+}
+
 function normalizeEvent(event) {
   if (!event || typeof event !== "object") {
     throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream event payload is invalid");
   }
 
   let recurrence;
+  let notifications;
   try {
     recurrence = normalizeIncomingRecurrence(event.recurrence ?? event.rrule ?? null);
   } catch {
     throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream recurrence payload is invalid");
+  }
+  try {
+    notifications = normalizeIncomingNotifications(event.notifications);
+  } catch {
+    throw new ApiError(502, "UPSTREAM_INVALID_EVENT", "Upstream notifications payload is invalid");
   }
 
   const occurrenceStart = event.occurrenceStart || event.recurrenceId || null;
@@ -501,6 +540,7 @@ function normalizeEvent(event) {
     isRecurring: Boolean(recurrence || seriesId || occurrenceStart),
     createdAt: event.createdAt || event.created_at || null,
     updatedAt: event.updatedAt || event.updated_at || null,
+    notifications,
   };
 
   if (!normalized.id || !normalized.calendarId || !normalized.title || !normalized.start || !normalized.end) {
@@ -512,6 +552,16 @@ function normalizeEvent(event) {
   }
 
   return normalized;
+}
+
+function normalizeIncomingNotifications(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    throw new Error("invalid notifications");
+  }
+  return value.map((item) => cloneJsonObject(item, "notifications"));
 }
 
 function normalizeIncomingRecurrence(value) {
