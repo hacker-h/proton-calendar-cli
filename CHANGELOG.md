@@ -1,3 +1,10 @@
+# [1.5.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.6...v1.5.0) (2026-05-11)
+
+
+### Features
+
+* **events:** add notification payload support ([#110](https://github.com/hacker-h/proton-calendar-cli/issues/110)) ([d4be748](https://github.com/hacker-h/proton-calendar-cli/commit/d4be7484a08d6d39e96e0893ffe9df28d8cf5466)), closes [#97](https://github.com/hacker-h/proton-calendar-cli/issues/97)
+
 ## [1.4.6](https://github.com/hacker-h/proton-calendar-cli/compare/v1.4.5...v1.4.6) (2026-05-10)
 
 
