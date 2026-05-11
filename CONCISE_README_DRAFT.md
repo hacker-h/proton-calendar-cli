@@ -127,7 +127,7 @@ CI runs the unit suite first. Live CI jobs run only when `PROTON_USERNAME` and `
 - Requires a local API server; the CLI does not talk directly to Proton for normal event commands.
 - Login/bootstrap depends on Chrome and local cookie/session export.
 - Supported recurrence frequencies are `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY`; `count` and `until` cannot both be set.
-- Event fields are intentionally narrow: no attendee invitation flow, RSVP state, reminder/alert controls, attachments, conference metadata, categories/tags, or arbitrary ICS import/export passthrough.
+- Event fields are intentionally narrow: reminder controls use Proton-compatible `Notifications` objects directly; no attendee invitation flow, RSVP state, attachments, conference metadata, categories/tags, or arbitrary ICS import/export passthrough.
 - `pc edit --clear` is limited to `description` and `location`.
 - Live tests require a Proton account/calendar suitable for automated cleanup.
 

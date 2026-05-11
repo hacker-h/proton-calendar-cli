@@ -87,6 +87,7 @@ Supported event fields:
 - `allDay`
 - `protected` (defaults to `true`; set `false` to allow shared-calendar members to edit)
 - `recurrence` with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
+- `notifications` as `null` or an array of up to 10 Proton-compatible notification objects; omitted `pc edit`/PATCH fields preserve existing notifications, and `notifications=null` clears event-specific notifications
 
 For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
 For monthly `byMonthDay`, values past the end of a shorter month fall back to that month's last day, so a `31` rule emits Feb 28/29 and Apr 30 instead of silently skipping those months.
@@ -102,7 +103,7 @@ Notes:
 
 - Output defaults to JSON. Use `-o table` for human-readable list output.
 - `pc edit` is PATCH-style: omitted fields are not sent.
-- `pc edit --clear` currently supports `description` and `location`.
+- `pc edit --clear` currently supports `description`, `location`, and `notifications`.
 - Supported recurrence frequencies are `DAILY`, `WEEKLY`, `MONTHLY`, and `YEARLY`.
 - Recurrence expansion evaluates at most 50,000 candidates by default; set `RECURRENCE_MAX_ITERATIONS` on the API server to tune that safety cap. If the cap is exhausted, the API returns `RECURRENCE_ITERATION_LIMIT` instead of a partial recurrence list.
 
@@ -276,7 +277,7 @@ pnpm run release:dry-run
 - Rate limits and `Retry-After` behavior are controlled by Proton and should stop automation until backoff expires.
 - List pagination uses `nextCursor` for output continuation only; broad date ranges still fetch, decode, expand recurrences, and sort the whole requested range before slicing the returned page.
 - `recurrence.count` and `recurrence.until` cannot both be set.
-- No attendee invitation flow, RSVP state, reminder controls, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
+- Reminder controls use Proton-compatible `Notifications` objects directly; no friendly reminder builder, attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
 
 ## License
