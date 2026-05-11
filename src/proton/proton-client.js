@@ -1,20 +1,25 @@
 import { setTimeout as delay } from "node:timers/promises";
 import * as openpgp from "openpgp";
+import { buildRefreshCookieHeader, buildRefreshUrls, extractRefreshPayloadFromCookies } from "./internal/auth-refresh.js";
+import { fromBase64, toBase64 } from "./internal/base64.js";
+import { fetchRangeRawEvents, fetchRawEvent, syncCalendarEvents } from "./internal/calendar-api.js";
+import { describeCookieChanges, flattenBundleCookies, getSetCookieHeaders } from "./internal/cookies.js";
+import { decryptAddressPassphrase, decryptPersistedSessionKeyPassword, decryptSymmetricMessageUtf8 } from "./internal/crypto.js";
+import { parseResponsePayload } from "./internal/http.js";
+import { requestProtonJson } from "./internal/http-client.js";
+import { buildSharedParts, hasDateValueProperty, parseIcsRecurrence, parseVcalUtc, parseVeventProperties, unescapeIcsText } from "./internal/ics.js";
+import { assertSyncDeleteResponse, assertSyncEventResponse, buildCreateSyncRequestBody, buildUpdateSyncRequestBody, resolveUpdateRecurrence } from "./internal/sync-payloads.js";
+import { parseCursor, readInteger, toUnix } from "./internal/time.js";
 import { DEFAULT_PROTON_APP_VERSION } from "../constants.js";
 import { ApiError } from "../errors.js";
 import { ProtonAuthManager } from "./proton-auth-manager.js";
 
+export { decryptPersistedSessionKeyPassword } from "./internal/crypto.js";
+export { buildSharedParts, formatVcalWithTzid } from "./internal/ics.js";
+export { buildCreateSyncRequestBody, buildUpdateSyncRequestBody, resolveUpdateRecurrence } from "./internal/sync-payloads.js";
+
 const AUTH_REFRESH_PATHS = ["/api/auth/refresh", "/api/auth/v4/refresh"];
-const LEGACY_PROTON_SESSION_BLOB_IV_BYTES = 16;
 const EVENT_PAGE_LIMIT = 10;
-const PROTON_ATTENDEE_PERMISSIONS = Object.freeze({
-  SEE: 1,
-  INVITE: 2,
-  SEE_AND_INVITE: 3,
-  EDIT: 4,
-  DELETE: 8,
-});
-const PROTON_IS_ORGANIZER = 1;
 
 export class ProtonCalendarClient {
   constructor(options) {
@@ -72,13 +77,15 @@ export class ProtonCalendarClient {
     const startUnix = toUnix(start);
     const endUnix = toUnix(end);
 
-    const rawEvents = await this.#fetchRangeRawEvents({
+    const rawEvents = await fetchRangeRawEvents({
+      requestJSON: this.#requestJSON.bind(this),
       uid,
       calendarId,
       startUnix,
       endUnix,
       timezone: "UTC",
       pageSize: Math.min(100, Math.max(1, limit)),
+      pageLimit: EVENT_PAGE_LIMIT,
     });
 
     const context = await this.#getContext(calendarId);
@@ -98,18 +105,10 @@ export class ProtonCalendarClient {
 
   async getEvent({ calendarId, eventId }) {
     const uid = await this.#getUID();
-    const payload = await this.#requestJSON(
-      "GET",
-      `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
-      { uid }
-    );
-
-    if (!payload?.Event) {
-      throw new ApiError(404, "NOT_FOUND", "Event not found");
-    }
+    const event = await fetchRawEvent({ requestJSON: this.#requestJSON.bind(this), uid, calendarId, eventId });
 
     const context = await this.#getContext(calendarId);
-    return this.#toEventModel(context, payload.Event);
+    return this.#toEventModel(context, event);
   }
 
   async createEvent({ calendarId, event, idempotencyKey }) {
@@ -151,11 +150,13 @@ export class ProtonCalendarClient {
       protected: event.protected,
     });
 
-    const response = await this.#requestJSON(
-      "PUT",
-      `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body, idempotencyKey }
-    );
+    const response = await syncCalendarEvents({
+      requestJSON: this.#requestJSON.bind(this),
+      uid,
+      calendarId,
+      body,
+      idempotencyKey,
+    });
 
     const created = assertSyncEventResponse(response);
     return this.#toEventModel(context, created);
@@ -165,15 +166,7 @@ export class ProtonCalendarClient {
     const context = await this.#getContext(calendarId);
     const uid = context.uid;
 
-    const existingPayload = await this.#requestJSON(
-      "GET",
-      `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/${encodeURIComponent(eventId)}`,
-      { uid }
-    );
-    const existing = existingPayload?.Event;
-    if (!existing) {
-      throw new ApiError(404, "NOT_FOUND", "Event not found");
-    }
+    const existing = await fetchRawEvent({ requestJSON: this.#requestJSON.bind(this), uid, calendarId, eventId });
 
     const decoded = await this.#decodeSharedEvent(context, existing);
 
@@ -226,11 +219,13 @@ export class ProtonCalendarClient {
       protected: effectiveProtected,
     });
 
-    const response = await this.#requestJSON(
-      "PUT",
-      `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body, idempotencyKey }
-    );
+    const response = await syncCalendarEvents({
+      requestJSON: this.#requestJSON.bind(this),
+      uid,
+      calendarId,
+      body,
+      idempotencyKey,
+    });
 
     const updated = assertSyncEventResponse(response);
     return this.#toEventModel(context, updated);
@@ -250,64 +245,15 @@ export class ProtonCalendarClient {
       ],
     };
 
-    const response = await this.#requestJSON(
-      "PUT",
-      `/api/calendar/v1/${encodeURIComponent(calendarId)}/events/sync`,
-      { uid, body, idempotencyKey }
-    );
+    const response = await syncCalendarEvents({
+      requestJSON: this.#requestJSON.bind(this),
+      uid,
+      calendarId,
+      body,
+      idempotencyKey,
+    });
     assertSyncDeleteResponse(response);
     return null;
-  }
-
-  async #fetchRangeRawEvents({ uid, calendarId, startUnix, endUnix, timezone, pageSize }) {
-    const dedupe = new Map();
-    const queryTypes = [0, 1, 2, 3];
-
-    for (const type of queryTypes) {
-      let page = 0;
-      let more = true;
-      while (more && page < EVENT_PAGE_LIMIT) {
-        const payload = await this.#requestJSON(
-          "GET",
-          `/api/calendar/v1/${encodeURIComponent(calendarId)}/events`,
-          {
-            uid,
-            query: {
-              Start: String(startUnix),
-              End: String(endUnix),
-              Timezone: timezone,
-              Type: String(type),
-              PageSize: String(pageSize),
-              Page: String(page),
-              MetaDataOnly: "0",
-            },
-          }
-        );
-
-        const events = Array.isArray(payload?.Events) ? payload.Events : [];
-        for (const event of events) {
-          if (event?.ID) {
-            dedupe.set(event.ID, event);
-          }
-        }
-
-        more = Boolean(payload?.More);
-        page += 1;
-      }
-
-      if (more) {
-        throw new ApiError(502, "UPSTREAM_EVENT_PAGE_LIMIT", "Proton event listing exceeded the page limit", {
-          calendarId,
-          startUnix,
-          endUnix,
-          type,
-          pageLimit: EVENT_PAGE_LIMIT,
-          pageSize,
-        });
-      }
-    }
-
-    return [...dedupe.values()];
   }
 
   async #toEventModel(context, rawEvent) {
@@ -657,24 +603,11 @@ export class ProtonCalendarClient {
 
   async #buildRefreshCookieHeader(url, uid) {
     const scopedHeader = await this.sessionStore.getCookieHeader(url.toString());
-    const scopedMap = parseCookieHeaderToMap(scopedHeader);
-
-    const bundleCookies = await this.#getBundleCookies();
-    const fallbackMap = new Map();
-
-    for (const cookie of bundleCookies) {
-      const name = String(cookie?.name || "");
-      if (!name) {
-        continue;
-      }
-
-      if (name === `REFRESH-${uid}` || name === `AUTH-${uid}` || name === "Session-Id" || name === "Tag" || name === "Domain") {
-        fallbackMap.set(name, String(cookie?.value || ""));
-      }
-    }
-
-    const merged = new Map([...fallbackMap, ...scopedMap]);
-    return mapToCookieHeader(merged);
+    return buildRefreshCookieHeader({
+      scopedHeader,
+      cookies: await this.#getBundleCookies(),
+      uid,
+    });
   }
 
   async #getBundleCookies() {
@@ -691,46 +624,7 @@ export class ProtonCalendarClient {
   }
 
   async #extractRefreshPayload(uid) {
-    const cookies = await this.#getBundleCookies();
-    const refreshCookies = cookies.filter((cookie) => typeof cookie.name === "string" && cookie.name.startsWith("REFRESH-"));
-    if (refreshCookies.length === 0) {
-      return null;
-    }
-
-    const selected =
-      refreshCookies.find((cookie) => cookie.name === `REFRESH-${uid}`) ||
-      refreshCookies.find((cookie) => String(cookie.name).includes(uid)) ||
-      refreshCookies[0];
-
-    const rawValue = String(selected?.value || "");
-    if (!rawValue) {
-      return null;
-    }
-
-    let decoded = rawValue;
-    try {
-      decoded = decodeURIComponent(rawValue);
-    } catch {
-      // keep raw fallback
-    }
-
-    let parsed;
-    try {
-      parsed = JSON.parse(decoded);
-    } catch {
-      return null;
-    }
-
-    if (!parsed || typeof parsed !== "object") {
-      return null;
-    }
-
-    return {
-      ...parsed,
-      UID: typeof parsed.UID === "string" && parsed.UID.length > 0 ? parsed.UID : uid,
-      ResponseType: parsed.ResponseType || "token",
-      GrantType: parsed.GrantType || "refresh_token",
-    };
+    return extractRefreshPayloadFromCookies(await this.#getBundleCookies(), uid);
   }
 
   async #persistResponseCookies(url, response, reason) {
@@ -764,143 +658,24 @@ export class ProtonCalendarClient {
   }
 
   async #requestJSON(method, pathname, options = {}) {
-    const uid = options.uid || (await this.#getUID());
-    const url = new URL(pathname, this.baseUrl);
-
-    const query = options.query || {};
-    for (const [key, value] of Object.entries(query)) {
-      if (value === undefined || value === null || value === "") {
-        continue;
-      }
-      url.searchParams.set(key, value);
-    }
-
-    const baseHeaders = {
-      Accept: "application/vnd.protonmail.v1+json",
-      "x-pm-appversion": this.appVersion,
-      "x-pm-locale": this.locale,
-      "x-pm-uid": uid,
-      ...(options.extraHeaders || {}),
-    };
-
-    if (options.idempotencyKey) {
-      baseHeaders["X-Idempotency-Key"] = options.idempotencyKey;
-    }
-    if (options.body !== undefined) {
-      baseHeaders["Content-Type"] = "application/json";
-    }
-
-    const body = options.body !== undefined ? JSON.stringify(options.body) : undefined;
-    let attempt = 0;
-    let authRefreshAttempted = false;
-
-    while (attempt <= this.maxRetries) {
-      const isFinalAttempt = attempt === this.maxRetries;
-      attempt += 1;
-
-      try {
-        const cookieHeader = await this.sessionStore.getCookieHeader(url.toString());
-        if (!cookieHeader) {
-          throw new ApiError(401, "AUTH_EXPIRED", "No valid session cookies available");
-        }
-
-        const response = await this.fetchImpl(url, {
-          method,
-          headers: {
-            ...baseHeaders,
-            Cookie: cookieHeader,
-          },
-          body,
-          signal: AbortSignal.timeout(this.timeoutMs),
-        });
-
-        await this.#persistResponseCookies(url, response, `${method}:${pathname}`);
-        const payload = await parseResponsePayload(response);
-        const retryDetails = readRetryAfterDetails(response, this.retryAfterMaxMs);
-        const authState = classifyAuthState(response.status, payload);
-
-        if (response.status === 429) {
-          if (!isFinalAttempt) {
-            await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
-            continue;
-          }
-          throw new ApiError(429, "RATE_LIMITED", "Proton rate limit exceeded", {
-            status: 429,
-            retryable: true,
-            ...retryDetails,
-          });
-        }
-
-        if (authState) {
-          throw new ApiError(response.status, authState.code, authState.message, {
-            status: response.status,
-            retryable: false,
-            authState: authState.authState,
-          });
-        }
-
-        if (response.status === 401 || response.status === 403) {
-          if (options.allowAuthRefresh !== false && !authRefreshAttempted) {
-            authRefreshAttempted = true;
-            const refreshed = await this.#attemptAuthRefresh(uid);
-            if (refreshed) {
-              attempt -= 1;
-              continue;
-            }
-          }
-
-          if (options.allowRelogin !== false) {
-            const relogged = await this.#attemptRelogin(uid, `${method}:${pathname}`);
-            if (relogged) {
-              attempt -= 1;
-              continue;
-            }
-          }
-
-          throw new ApiError(401, "AUTH_EXPIRED", "Proton session is expired or unauthorized");
-        }
-
-        if (response.status === 404) {
-          throw new ApiError(404, "NOT_FOUND", "Resource not found");
-        }
-
-        if (response.status >= 500 && !isFinalAttempt) {
-          await this.delay(retryDetails.retryAfterMs ?? backoffMs(attempt));
-          continue;
-        }
-
-        if (!response.ok) {
-          throw new ApiError(response.status, "UPSTREAM_ERROR", "Upstream request failed", {
-            status: response.status,
-            retryable: response.status >= 500 ? true : undefined,
-            ...retryDetails,
-            ...sanitizeUpstreamPayload(payload),
-          });
-        }
-
-        if (payload && typeof payload === "object" && typeof payload.Code === "number") {
-          if (![1000, 1001].includes(payload.Code)) {
-            throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected upstream response", sanitizeUpstreamPayload(payload));
-          }
-        }
-
-        return payload;
-      } catch (error) {
-        if (error instanceof ApiError) {
-          throw error;
-        }
-
-        if (isFinalAttempt) {
-          throw new ApiError(502, "UPSTREAM_UNREACHABLE", "Unable to reach Proton backend", {
-            cause: "network",
-          });
-        }
-
-        await this.delay(backoffMs(attempt));
-      }
-    }
-
-    throw new ApiError(502, "UPSTREAM_UNREACHABLE", "Unable to reach Proton backend");
+    return await requestProtonJson({
+      method,
+      pathname,
+      options,
+      baseUrl: this.baseUrl,
+      fetchImpl: this.fetchImpl,
+      sessionStore: this.sessionStore,
+      appVersion: this.appVersion,
+      locale: this.locale,
+      timeoutMs: this.timeoutMs,
+      maxRetries: this.maxRetries,
+      retryAfterMaxMs: this.retryAfterMaxMs,
+      delay: this.delay,
+      getUID: this.#getUID.bind(this),
+      attemptAuthRefresh: this.#attemptAuthRefresh.bind(this),
+      attemptRelogin: this.#attemptRelogin.bind(this),
+      persistResponseCookies: this.#persistResponseCookies.bind(this),
+    });
   }
 
   async #attemptRelogin(uid, reason) {
@@ -966,832 +741,4 @@ function findPersistedSession(persistedSessions, uid) {
   }
 
   return null;
-}
-
-export async function decryptPersistedSessionKeyPassword({ clientKeyBase64, persistedBlobBase64 }) {
-  if (!clientKeyBase64 || !persistedBlobBase64) {
-    throw new ApiError(401, "SESSION_BLOB_MISSING", "Missing client key or persisted session blob");
-  }
-
-  const keyBytes = fromBase64(clientKeyBase64);
-  const cryptoKey = await crypto.subtle.importKey("raw", keyBytes, "AES-GCM", false, ["decrypt"]);
-
-  const blobBytes = fromBase64(persistedBlobBase64);
-  // Proton persisted sessions still use the legacy WebClients sessionBlobCryptoHelper
-  // format: encryptDataWith16ByteIV()/decryptData(..., true). V3 helpers use the
-  // standard 12-byte AES-GCM IV, but persisted `blob` storage does not.
-  const iv = blobBytes.slice(0, LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
-  const ciphertext = blobBytes.slice(LEGACY_PROTON_SESSION_BLOB_IV_BYTES);
-
-  let decrypted;
-  try {
-    decrypted = await crypto.subtle.decrypt({ name: "AES-GCM", iv }, cryptoKey, ciphertext);
-  } catch {
-    throw new ApiError(401, "SESSION_BLOB_INVALID", "Unable to decrypt persisted session blob");
-  }
-
-  const parsed = JSON.parse(new TextDecoder().decode(new Uint8Array(decrypted)));
-  const keyPassword = parsed?.keyPassword;
-  if (typeof keyPassword !== "string" || keyPassword.length === 0) {
-    throw new ApiError(401, "SESSION_BLOB_INVALID", "Persisted session does not contain keyPassword");
-  }
-  return keyPassword;
-}
-
-async function decryptAddressPassphrase({ token, signature, userPrivateKey, userPublicKey, fallbackPassphrase }) {
-  if (!token) {
-    return fallbackPassphrase;
-  }
-
-  const message = await openpgp.readMessage({ armoredMessage: token });
-  const signatureObject = signature
-    ? await openpgp.readSignature({ armoredSignature: signature }).catch(() => undefined)
-    : undefined;
-
-  const decrypted = await openpgp.decrypt({
-    message,
-    decryptionKeys: userPrivateKey,
-    verificationKeys: userPublicKey,
-    ...(signatureObject ? { signature: signatureObject } : {}),
-    format: "utf8",
-  });
-
-  if (decrypted.signatures?.length > 0) {
-    await decrypted.signatures[0].verified;
-  }
-
-  return String(decrypted.data);
-}
-
-export function formatVcalWithTzid(date, timezone) {
-  if (!timezone || timezone === "UTC") {
-    return { key: "DTSTART", value: formatVcalUtc(date) };
-  }
-  // Format as local time with TZID parameter
-  const asDate = date instanceof Date ? date : new Date(date);
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hour12: false,
-  });
-  const parts = formatter.formatToParts(asDate);
-  const get = (type) => parts.find((p) => p.type === type)?.value || "00";
-  const local = `${get("year")}${get("month")}${get("day")}T${get("hour")}${get("minute")}${get("second")}`;
-  return { key: `DTSTART;TZID=${timezone}`, value: local };
-}
-
-export function buildSharedParts({
-  uid,
-  sequence,
-  organizerEmail: _organizerEmail,
-  startDate,
-  endDate,
-  allDay = false,
-  title,
-  description,
-  location,
-  recurrence,
-  createdDate,
-  timezone,
-}) {
-  const now = new Date();
-  const dtstamp = formatVcalUtc(now);
-  const created = formatVcalUtc(createdDate || now);
-
-  const effectiveTimezone = timezone || "UTC";
-  const dtstartFormatted = allDay
-    ? { key: "DTSTART;VALUE=DATE", value: formatVcalDate(startDate, effectiveTimezone) }
-    : effectiveTimezone !== "UTC"
-      ? formatVcalWithTzid(startDate, effectiveTimezone)
-      : { key: "DTSTART", value: formatVcalUtc(startDate) };
-  const dtendFormatted = allDay
-    ? { key: "DTEND;VALUE=DATE", value: formatAllDayEndDate(endDate, effectiveTimezone) }
-    : effectiveTimezone !== "UTC"
-      ? { key: dtstartFormatted.key.replace("DTSTART", "DTEND"), value: formatVcalWithTzid(endDate, effectiveTimezone).value }
-      : { key: "DTEND", value: formatVcalUtc(endDate) };
-
-  // DO NOT add ORGANIZER here. Proton's UI treats any signed VEVENT with an
-  // ORGANIZER property as an invitation (getEventInformation.ts:
-  // `isInvitation: !!model.organizer`) and blocks edit/move unless the
-  // current user matches the organizer email (getCanEditSharedEventData in
-  // event.ts). Native Proton clients only emit ORGANIZER for events with
-  // real attendees; including it on personal events makes them read-only.
-  const signedProperties = [
-    ["UID", uid],
-    ["DTSTAMP", dtstamp],
-    [dtstartFormatted.key, dtstartFormatted.value],
-    [dtendFormatted.key, dtendFormatted.value],
-    ["SEQUENCE", String(sequence)],
-  ];
-
-  const encryptedProperties = [
-    ["UID", uid],
-    ["DTSTAMP", dtstamp],
-    ["CREATED", created],
-    ["SUMMARY", escapeIcsText(title || "")],
-    ["DESCRIPTION", escapeIcsText(description || "")],
-    ["LOCATION", escapeIcsText(location || "")],
-  ];
-
-  const recurrenceRule = formatIcsRecurrenceRule(recurrence);
-  if (recurrenceRule) {
-    signedProperties.push(["RRULE", recurrenceRule]);
-    encryptedProperties.push(["RRULE", recurrenceRule]);
-  }
-
-  const exdates = formatIcsExdates(recurrence?.exDates || []);
-  if (exdates) {
-    encryptedProperties.push(["EXDATE", exdates]);
-  }
-
-  return {
-    signedPart: buildVcalendarVevent(signedProperties),
-    encryptedPart: buildVcalendarVevent(encryptedProperties),
-  };
-}
-
-export function buildCreateSyncRequestBody({ memberId, sharedKeyPacket, sharedEventContent, protected: isProtected = true }) {
-  const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
-  const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
-  return {
-    MemberID: memberId,
-    Events: [
-      {
-        Overwrite: 0,
-        Event: {
-          Permissions: permissions,
-          IsOrganizer: isOrganizer,
-          SharedKeyPacket: sharedKeyPacket,
-          SharedEventContent: sharedEventContent,
-          Notifications: null,
-          Color: null,
-        },
-      },
-    ],
-  };
-}
-
-export function buildUpdateSyncRequestBody({
-  memberId,
-  eventId,
-  sharedEventContent,
-  notifications,
-  color,
-  scope = "series",
-  occurrenceStart = null,
-  protected: isProtected = true,
-}) {
-  const permissions = isProtected ? PROTON_ATTENDEE_PERMISSIONS.SEE_AND_INVITE : PROTON_ATTENDEE_PERMISSIONS.SEE;
-  const isOrganizer = isProtected ? PROTON_IS_ORGANIZER : 0;
-  return {
-    MemberID: memberId,
-    Events: [
-      {
-        ID: eventId,
-        Event: {
-          Permissions: permissions,
-          IsOrganizer: isOrganizer,
-          IsBreakingChange: scope === "following" ? 1 : 0,
-          IsPersonalSingleEdit: scope === "single",
-          SharedEventContent: sharedEventContent,
-          Notifications: notifications,
-          Color: color,
-          ...(occurrenceStart ? { RecurrenceID: toUnix(occurrenceStart) } : {}),
-        },
-      },
-    ],
-  };
-}
-
-export function resolveUpdateRecurrence({ scope = "series", patchRecurrence, existingRecurrence }) {
-  if (scope === "single") {
-    return null;
-  }
-
-  if (patchRecurrence === undefined) {
-    return existingRecurrence;
-  }
-
-  return patchRecurrence;
-}
-
-function buildVcalendarVevent(properties) {
-  const lines = ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//proton-calendar-api//EN", "BEGIN:VEVENT"];
-  for (const [key, value] of properties) {
-    if (value === undefined || value === null || String(value) === "") {
-      continue;
-    }
-    lines.push(foldIcsLine(`${key}:${value}`));
-  }
-  lines.push("END:VEVENT", "END:VCALENDAR", "");
-  return lines.join("\r\n");
-}
-
-function foldIcsLine(line) {
-  if (Buffer.byteLength(line, "utf8") <= 75) {
-    return line;
-  }
-
-  const segments = [];
-  let segment = "";
-  let segmentBytes = 0;
-  let limit = 75;
-
-  for (const char of line) {
-    const charBytes = Buffer.byteLength(char, "utf8");
-    if (segment && segmentBytes + charBytes > limit) {
-      segments.push(segment);
-      segment = "";
-      segmentBytes = 0;
-      limit = 74;
-    }
-    segment += char;
-    segmentBytes += charBytes;
-  }
-
-  if (segment) {
-    segments.push(segment);
-  }
-
-  return segments.map((part, index) => (index === 0 ? part : ` ${part}`)).join("\r\n");
-}
-
-function unfoldIcsLines(ics) {
-  if (!ics || typeof ics !== "string") {
-    return [];
-  }
-
-  const unfolded = [];
-  for (const rawLine of ics.split(/\r?\n/)) {
-    if (!rawLine) {
-      continue;
-    }
-    if ((rawLine.startsWith(" ") || rawLine.startsWith("\t")) && unfolded.length > 0) {
-      unfolded[unfolded.length - 1] += rawLine.slice(1);
-      continue;
-    }
-    unfolded.push(rawLine);
-  }
-  return unfolded;
-}
-
-function parseVeventProperties(ics) {
-  if (!ics || typeof ics !== "string") {
-    return {};
-  }
-
-  const unfolded = unfoldIcsLines(ics);
-
-  const beginIndex = unfolded.findIndex((line) => line === "BEGIN:VEVENT");
-  const endIndex = unfolded.findIndex((line) => line === "END:VEVENT");
-  if (beginIndex === -1 || endIndex === -1 || endIndex <= beginIndex) {
-    return {};
-  }
-
-  const props = {};
-  for (const line of unfolded.slice(beginIndex + 1, endIndex)) {
-    const separator = line.indexOf(":");
-    if (separator <= 0) {
-      continue;
-    }
-    const keyWithParams = line.slice(0, separator).toUpperCase();
-    const key = keyWithParams.split(";")[0];
-    const value = line.slice(separator + 1);
-    props[key] = value;
-  }
-
-  return props;
-}
-
-function hasDateValueProperty(ics, propertyName) {
-  const prefix = propertyName.toUpperCase();
-  for (const line of unfoldIcsLines(ics)) {
-    const separator = line.indexOf(":");
-    if (separator <= 0) {
-      continue;
-    }
-    const left = line.slice(0, separator).toUpperCase();
-    if (left === prefix) {
-      return false;
-    }
-    if (!left.startsWith(`${prefix};`)) {
-      continue;
-    }
-    const params = left.slice(prefix.length + 1);
-    if (/(^|;)VALUE=DATE($|;)/.test(params)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-async function decryptSymmetricMessageUtf8(encryptedBase64, sessionKey) {
-  const message = await openpgp.readMessage({ binaryMessage: fromBase64(encryptedBase64) });
-  const result = await openpgp.decrypt({
-    message,
-    sessionKeys: [sessionKey],
-    format: "utf8",
-  });
-  return String(result.data);
-}
-
-function formatVcalUtc(date) {
-  const asDate = date instanceof Date ? date : new Date(date);
-  const iso = asDate.toISOString();
-  return iso.replace(/[-:]/g, "").replace(/\.\d{3}/, "");
-}
-
-function formatVcalDate(date, timezone = "UTC") {
-  const parts = getDateTimeParts(date, timezone);
-  return `${parts.year}${parts.month}${parts.day}`;
-}
-
-function formatAllDayEndDate(date, timezone) {
-  const stamp = formatVcalDate(date, timezone);
-  return isMidnightInTimeZone(date, timezone) ? stamp : incrementDateStamp(stamp);
-}
-
-function incrementDateStamp(stamp) {
-  const parsed = new Date(`${stamp.slice(0, 4)}-${stamp.slice(4, 6)}-${stamp.slice(6, 8)}T00:00:00.000Z`);
-  parsed.setUTCDate(parsed.getUTCDate() + 1);
-  return parsed.toISOString().slice(0, 10).replace(/-/g, "");
-}
-
-function isMidnightInTimeZone(date, timezone) {
-  const parts = getDateTimeParts(date, timezone);
-  return parts.hour === "00" && parts.minute === "00" && parts.second === "00";
-}
-
-function getDateTimeParts(date, timezone) {
-  const asDate = date instanceof Date ? date : new Date(date);
-  const formatter = new Intl.DateTimeFormat("en-CA", {
-    timeZone: timezone,
-    year: "numeric",
-    month: "2-digit",
-    day: "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    second: "2-digit",
-    hourCycle: "h23",
-  });
-  const parts = formatter.formatToParts(asDate);
-  const get = (type) => parts.find((part) => part.type === type)?.value || "00";
-  return {
-    year: get("year"),
-    month: get("month"),
-    day: get("day"),
-    hour: get("hour"),
-    minute: get("minute"),
-    second: get("second"),
-  };
-}
-
-function parseVcalUtc(raw) {
-  if (!raw || typeof raw !== "string") {
-    return null;
-  }
-  const match = raw.match(/^(\d{4})(\d{2})(\d{2})T(\d{2})(\d{2})(\d{2})Z$/);
-  if (!match) {
-    return null;
-  }
-  const [, y, m, d, hh, mm, ss] = match;
-  return new Date(Date.UTC(Number(y), Number(m) - 1, Number(d), Number(hh), Number(mm), Number(ss)));
-}
-
-function escapeIcsText(value) {
-  return String(value)
-    .replace(/\\/g, "\\\\")
-    .replace(/\n/g, "\\n")
-    .replace(/,/g, "\\,")
-    .replace(/;/g, "\\;");
-}
-
-function unescapeIcsText(value) {
-  return String(value)
-    .replace(/\\n/g, "\n")
-    .replace(/\\,/g, ",")
-    .replace(/\\;/g, ";")
-    .replace(/\\\\/g, "\\");
-}
-
-function parseIcsRecurrence(props) {
-  const rruleRaw = props.RRULE;
-  if (!rruleRaw || typeof rruleRaw !== "string") {
-    return null;
-  }
-
-  const parts = {};
-  for (const pair of rruleRaw.split(";")) {
-    const [keyRaw, valueRaw] = pair.split("=");
-    const key = String(keyRaw || "").trim().toUpperCase();
-    const value = String(valueRaw || "").trim();
-    if (!key || !value) {
-      continue;
-    }
-    parts[key] = value;
-  }
-
-  if (!parts.FREQ) {
-    return null;
-  }
-
-  const recurrence = {
-    freq: parts.FREQ,
-    interval: parts.INTERVAL ? Number(parts.INTERVAL) : 1,
-    count: parts.COUNT ? Number(parts.COUNT) : null,
-    until: parts.UNTIL ? parseIcsRruleDate(parts.UNTIL) : null,
-    byDay: parts.BYDAY
-      ? parts.BYDAY
-          .split(",")
-          .map((item) => item.trim().toUpperCase())
-          .filter(Boolean)
-      : [],
-    byMonthDay: parts.BYMONTHDAY
-      ? parts.BYMONTHDAY
-          .split(",")
-          .map((item) => Number(item.trim()))
-          .filter((value) => Number.isInteger(value))
-      : [],
-    weekStart: parts.WKST || null,
-    exDates: parseIcsExdates(props.EXDATE),
-  };
-
-  return recurrence;
-}
-
-function formatIcsRecurrenceRule(recurrence) {
-  if (!recurrence || typeof recurrence !== "object") {
-    return "";
-  }
-
-  const freq = String(recurrence.freq || "").trim().toUpperCase();
-  if (!freq) {
-    return "";
-  }
-
-  const fields = [["FREQ", freq]];
-
-  if (Number.isInteger(recurrence.interval) && recurrence.interval > 1) {
-    fields.push(["INTERVAL", String(recurrence.interval)]);
-  }
-  if (Number.isInteger(recurrence.count) && recurrence.count > 0) {
-    fields.push(["COUNT", String(recurrence.count)]);
-  }
-  if (recurrence.until) {
-    fields.push(["UNTIL", formatVcalUtc(recurrence.until)]);
-  }
-
-  if (Array.isArray(recurrence.byDay) && recurrence.byDay.length > 0) {
-    const byDay = recurrence.byDay.map((item) => String(item).trim().toUpperCase()).filter(Boolean).join(",");
-    if (byDay) {
-      fields.push(["BYDAY", byDay]);
-    }
-  }
-
-  if (Array.isArray(recurrence.byMonthDay) && recurrence.byMonthDay.length > 0) {
-    const byMonthDay = recurrence.byMonthDay
-      .map((item) => Number(item))
-      .filter((item) => Number.isInteger(item) && item >= 1 && item <= 31)
-      .join(",");
-    if (byMonthDay) {
-      fields.push(["BYMONTHDAY", byMonthDay]);
-    }
-  }
-
-  if (recurrence.weekStart) {
-    fields.push(["WKST", String(recurrence.weekStart).trim().toUpperCase()]);
-  }
-
-  return fields.map(([key, value]) => `${key}=${value}`).join(";");
-}
-
-function parseIcsExdates(raw) {
-  if (!raw || typeof raw !== "string") {
-    return [];
-  }
-
-  return raw
-    .split(",")
-    .map((item) => parseIcsRruleDate(item.trim()))
-    .filter(Boolean);
-}
-
-function formatIcsExdates(exDates) {
-  if (!Array.isArray(exDates) || exDates.length === 0) {
-    return "";
-  }
-
-  const values = exDates
-    .map((value) => {
-      const parsed = Date.parse(value);
-      if (Number.isNaN(parsed)) {
-        return "";
-      }
-      return formatVcalUtc(new Date(parsed));
-    })
-    .filter(Boolean);
-
-  return values.join(",");
-}
-
-function parseIcsRruleDate(value) {
-  const trimmed = String(value || "").trim();
-  if (!trimmed) {
-    return null;
-  }
-
-  const parsedVcal = parseVcalUtc(trimmed);
-  if (parsedVcal) {
-    return parsedVcal.toISOString();
-  }
-
-  const parsed = Date.parse(trimmed);
-  if (Number.isNaN(parsed)) {
-    return null;
-  }
-  return new Date(parsed).toISOString();
-}
-
-function readInteger(value, fallback = 0) {
-  const parsed = Number(value);
-  if (!Number.isFinite(parsed)) {
-    return fallback;
-  }
-  return Math.floor(parsed);
-}
-
-function parseCursor(cursor) {
-  const parsed = Number(cursor || "0");
-  if (!Number.isFinite(parsed) || parsed < 0) {
-    return 0;
-  }
-  return Math.floor(parsed);
-}
-
-function toUnix(isoString) {
-  const ms = Date.parse(isoString);
-  if (Number.isNaN(ms)) {
-    throw new ApiError(400, "INVALID_TIME_RANGE", "Invalid time range");
-  }
-  return Math.floor(ms / 1000);
-}
-
-function toBase64(input) {
-  return Buffer.from(input).toString("base64");
-}
-
-function fromBase64(value) {
-  return Uint8Array.from(Buffer.from(String(value), "base64"));
-}
-
-function assertSyncEventResponse(payload) {
-  if (payload?.Code !== 1001 || !Array.isArray(payload?.Responses) || payload.Responses.length === 0) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Unexpected sync response payload", sanitizeUpstreamPayload(payload));
-  }
-
-  const op = payload.Responses[0]?.Response;
-  if (!op) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing sync operation response", sanitizeUpstreamPayload(payload));
-  }
-
-  if (op.Code !== 1000) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Sync operation failed", {
-      code: op.Code,
-    });
-  }
-
-  if (!op.Event) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Missing event in sync response", sanitizeUpstreamPayload(payload));
-  }
-
-  return op.Event;
-}
-
-function assertSyncDeleteResponse(payload) {
-  if (![1000, 1001].includes(payload?.Code)) {
-    throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", sanitizeUpstreamPayload(payload));
-  }
-
-  if (!Array.isArray(payload?.Responses)) {
-    return;
-  }
-
-  for (const item of payload.Responses) {
-    const op = item?.Response;
-    if (op && op.Code !== 1000) {
-      throw new ApiError(502, "UPSTREAM_ERROR", "Delete operation failed", {
-        code: op.Code,
-      });
-    }
-  }
-}
-
-function sanitizeUpstreamPayload(payload) {
-  const details = {};
-  if (payload && typeof payload === "object" && typeof payload.Code === "number") {
-    details.code = payload.Code;
-  }
-  return details;
-}
-
-function getSetCookieHeaders(headers) {
-  if (!headers) {
-    return [];
-  }
-
-  if (typeof headers.getSetCookie === "function") {
-    const values = headers.getSetCookie();
-    if (Array.isArray(values)) {
-      return values.filter((value) => typeof value === "string" && value.length > 0);
-    }
-  }
-
-  const combined = headers.get("set-cookie");
-  if (!combined) {
-    return [];
-  }
-  return [combined];
-}
-
-function flattenBundleCookies(bundle) {
-  const rows = [];
-
-  if (Array.isArray(bundle?.cookies)) {
-    rows.push(...bundle.cookies);
-  }
-
-  if (bundle?.cookiesByDomain && typeof bundle.cookiesByDomain === "object") {
-    for (const [domain, cookies] of Object.entries(bundle.cookiesByDomain)) {
-      if (!Array.isArray(cookies)) {
-        continue;
-      }
-      rows.push(...cookies.map((cookie) => ({ domain, ...cookie })));
-    }
-  }
-
-  return rows.filter((cookie) => cookie && typeof cookie === "object");
-}
-
-function buildRefreshUrls(baseUrl, paths) {
-  const urls = [];
-  for (const pathname of paths) {
-    urls.push(new URL(pathname, baseUrl).toString());
-    urls.push(new URL(pathname, "https://account.proton.me").toString());
-  }
-  return [...new Set(urls)];
-}
-
-function parseCookieHeaderToMap(cookieHeader) {
-  const map = new Map();
-  if (!cookieHeader) {
-    return map;
-  }
-
-  for (const part of String(cookieHeader).split(";")) {
-    const trimmed = part.trim();
-    if (!trimmed) {
-      continue;
-    }
-
-    const idx = trimmed.indexOf("=");
-    if (idx <= 0) {
-      continue;
-    }
-
-    const name = trimmed.slice(0, idx).trim();
-    const value = trimmed.slice(idx + 1);
-    if (!name) {
-      continue;
-    }
-
-    map.set(name, value);
-  }
-
-  return map;
-}
-
-function mapToCookieHeader(map) {
-  const pairs = [];
-  for (const [name, value] of map.entries()) {
-    if (!name) {
-      continue;
-    }
-    pairs.push(`${name}=${value}`);
-  }
-  return pairs.join("; ");
-}
-
-function describeCookieChanges(changes) {
-  return changes.map((change) => ({
-    action: change.action,
-    name: change.name,
-    domain: change.domain,
-    path: change.path,
-    previousExpiresAt: formatExpiry(change.previousExpiresAt),
-    nextExpiresAt: formatExpiry(change.nextExpiresAt),
-  }));
-}
-
-function formatExpiry(value) {
-  if (typeof value !== "number" || !Number.isFinite(value)) {
-    return null;
-  }
-  return new Date(value).toISOString();
-}
-
-function backoffMs(attempt) {
-  return Math.min(1500, 120 * 2 ** attempt);
-}
-
-function readRetryAfterDetails(response, retryAfterMaxMs) {
-  const retryAfterMs = parseRetryAfterMs(response.headers?.get?.("retry-after"));
-  if (!Number.isFinite(retryAfterMs)) {
-    return {};
-  }
-
-  const maxMs = Number(retryAfterMaxMs);
-  const cappedMs = Number.isFinite(maxMs) && maxMs >= 0 ? Math.min(retryAfterMs, maxMs) : retryAfterMs;
-  return {
-    retryAfterMs: cappedMs,
-    retryAfterSeconds: Math.ceil(cappedMs / 1000),
-  };
-}
-
-function parseRetryAfterMs(value, nowMs = Date.now()) {
-  const raw = String(value || "").trim();
-  if (!raw) {
-    return Number.NaN;
-  }
-
-  const seconds = Number(raw);
-  if (Number.isFinite(seconds) && seconds >= 0) {
-    return seconds * 1000;
-  }
-
-  const dateMs = Date.parse(raw);
-  if (Number.isNaN(dateMs)) {
-    return Number.NaN;
-  }
-
-  return Math.max(0, dateMs - nowMs);
-}
-
-function classifyAuthState(status, payload) {
-  if (![401, 403].includes(status)) {
-    return null;
-  }
-
-  const text = JSON.stringify(payload || {}).toLowerCase();
-  if (/captcha|human.?verification|verify you are human/.test(text)) {
-    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "captcha");
-  }
-  if (/two.?factor|2fa|mfa|one.?time code|security code/.test(text)) {
-    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "mfa");
-  }
-  if (/email code|mail code/.test(text)) {
-    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "email_code");
-  }
-  if (/locked|disabled/.test(text)) {
-    return authState("AUTH_CHALLENGE_REQUIRED", "Proton requires interactive verification", "account_locked");
-  }
-  if (/invalid.?refresh|refresh.?token|invalid.?grant|session revoked|deauth/.test(text)) {
-    return authState("AUTH_EXPIRED", "Proton session cannot be refreshed", "invalid_refresh");
-  }
-  if (/paid|plan|subscription/.test(text)) {
-    return authState("PROTON_PLAN_REQUIRED", "Proton account plan does not allow this operation", "plan_required");
-  }
-  if (/permission|not allowed|forbidden|access denied/.test(text)) {
-    return authState("PROTON_PERMISSION_DENIED", "Proton denied access to this operation", "permission_denied");
-  }
-  return null;
-}
-
-function authState(code, message, authStateValue) {
-  return {
-    code,
-    message,
-    authState: authStateValue,
-  };
-}
-
-async function parseResponsePayload(response) {
-  if (response.status === 204) {
-    return null;
-  }
-
-  const text = await response.text();
-  if (!text) {
-    return null;
-  }
-
-  try {
-    return JSON.parse(text);
-  } catch {
-    return { raw: text };
-  }
 }
