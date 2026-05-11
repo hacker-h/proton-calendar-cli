@@ -1227,6 +1227,44 @@ test("new sends normal string assignment values unchanged", async () => {
   assert.equal(body.title, "Design review");
 });
 
+test("new dry-run previews request without config or API call", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    ["new", "--dry-run", "title=Design review", "start=2026-03-10T10:00:00Z", "end=2026-03-10T10:30:00Z"],
+    {
+      env: {},
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout,
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(apiCalled, false);
+  assert.deepEqual(JSON.parse(stdout.value()), {
+    data: {
+      dryRun: true,
+      operation: "create",
+      method: "POST",
+      path: "/v1/events",
+      query: {},
+      payload: {
+        title: "Design review",
+        start: "2026-03-10T10:00:00Z",
+        end: "2026-03-10T10:30:00Z",
+        timezone: "UTC",
+      },
+    },
+  });
+});
+
 test("ls rejects whitespace-only text filter before API call", async () => {
   const stderr = createWriter();
 
@@ -1688,6 +1726,82 @@ test("edit supports --patch @file and assignment overrides", async () => {
     description: "",
     location: "Room B",
   });
+});
+
+test("edit dry-run previews differential patch without config or API call", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    [
+      "edit",
+      "evt-1",
+      "--dry-run",
+      "--calendar",
+      "cal-1",
+      "title=Renamed",
+      "--clear",
+      "description",
+      "--scope",
+      "single",
+      "--at",
+      "2026-03-12T09:00:00.000Z",
+    ],
+    {
+      env: {},
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout,
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(apiCalled, false);
+  assert.deepEqual(JSON.parse(stdout.value()), {
+    data: {
+      dryRun: true,
+      operation: "update",
+      method: "PATCH",
+      path: "/v1/calendars/cal-1/events/evt-1",
+      query: {
+        scope: "single",
+        occurrenceStart: "2026-03-12T09:00:00.000Z",
+      },
+      payload: {
+        title: "Renamed",
+        description: "",
+      },
+    },
+  });
+});
+
+test("dry-run still rejects invalid mutation args before config or API", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    ["new", "--dry-run", "title=Bad", "start=2026-07-02T10:30:00Z", "end=2026-07-02T10:00:00Z"],
+    {
+      env: {},
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout: createWriter(),
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "INVALID_ARGS");
+  assert.equal(payload.error.message, "end must be after start");
 });
 
 test("new rejects invalid --tz before API call", async () => {

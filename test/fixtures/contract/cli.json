@@ -114,6 +114,35 @@
       }
     },
     {
+      "name": "create event dry-run preview",
+      "argv": [
+        "new",
+        "--dry-run",
+        "title=Design review",
+        "start=2026-03-10T10:00:00Z",
+        "end=2026-03-10T10:30:00Z"
+      ],
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "dryRun": true,
+            "operation": "create",
+            "method": "POST",
+            "path": "/v1/events",
+            "query": {},
+            "payload": {
+              "title": "Design review",
+              "start": "2026-03-10T10:00:00Z",
+              "end": "2026-03-10T10:30:00Z",
+              "timezone": "UTC"
+            }
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
       "name": "list protected filter success",
       "argv": [
         "ls",
@@ -378,6 +407,43 @@
             "id": "evt-2",
             "title": "Updated",
             "description": ""
+          }
+        },
+        "stderr": ""
+      }
+    },
+    {
+      "name": "edit event dry-run preview",
+      "argv": [
+        "edit",
+        "evt-2",
+        "--dry-run",
+        "--calendar",
+        "assistant-calendar",
+        "title=Updated",
+        "--clear",
+        "description",
+        "--scope",
+        "single",
+        "--at",
+        "2026-03-12T09:00:00.000Z"
+      ],
+      "expected": {
+        "exitCode": 0,
+        "stdout": {
+          "data": {
+            "dryRun": true,
+            "operation": "update",
+            "method": "PATCH",
+            "path": "/v1/calendars/assistant-calendar/events/evt-2",
+            "query": {
+              "scope": "single",
+              "occurrenceStart": "2026-03-12T09:00:00.000Z"
+            },
+            "payload": {
+              "title": "Updated",
+              "description": ""
+            }
           }
         },
         "stderr": ""

@@ -16,8 +16,8 @@ Usage:
   pc doctor auth [options]
   pc calendars [options]
   pc ls [today|tomorrow|next N|w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
-  pc new <field=value...> [--tz TIMEZONE]
-  pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD]
+  pc new <field=value...> [--tz TIMEZONE] [--dry-run]
+  pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD] [--dry-run]
   pc rm <eventId>
 
 Examples:
@@ -38,8 +38,10 @@ Examples:
   pc ls --description workshop
   pc ls --location "room a"
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
+  pc new --dry-run title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
   pc new title="Reminder" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC notifications='[{"Type":1,"Trigger":"-PT10M"}]'
   pc edit evt-1 title="Updated" --clear description
+  pc edit evt-1 --dry-run title="Updated"
   pc edit evt-1 notifications=null
   pc edit evt-1 --scope single --at 2026-03-12T09:00:00Z location="Room B"
   pc rm evt-1 --scope series
@@ -87,6 +89,9 @@ List options:
 
 Mutation fields:
   notifications      Null or an array of up to 10 Proton-compatible notification objects; omitted edit fields are preserved
+
+Mutation options:
+  --dry-run          Validate and print the JSON request preview without loading API config or calling the API
 
 Local config JSON (default: secrets/pc-cli.json):
   { "apiBaseUrl": "http://127.0.0.1:8787", "apiToken": "replace-me" }
