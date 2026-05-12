@@ -215,7 +215,7 @@ Operational defaults:
 - Keep secrets under `secrets/` or CI secret storage and never upload cookie bundles as artifacts.
 - Fail closed when output is not valid JSON or when `error.code` is unknown.
 - For scheduled jobs, respect `RATE_LIMITED` retry details before retrying, add exponential backoff for transient upstream failures, and notify a human after the first auth challenge or private-API drift failure.
-- Keep live Proton checks separate from required pull-request CI unless the runner has dedicated credentials and safe cleanup.
+- Keep live Proton checks required only for trusted CI contexts with dedicated credentials and safe cleanup; never expose Proton secrets to forked pull-request code.
 
 ## Development
 
@@ -233,9 +233,9 @@ pnpm test:live:cli     # requires live Proton env/session
 
 Pull-request CI runs the required no-quota local gate: frozen pnpm install, static ESLint/checkJs checks, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
 
-The live Proton canary is optional and runs only for `workflow_dispatch` or the weekly schedule. It installs Chromium, checks for dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests do not require these secrets or the live canary.
+The live Proton canary is required for trusted CI contexts: pushes to `main`, scheduled/manual runs, and same-repository pull requests. It installs Chromium, requires dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests from forks do not receive repository secrets and therefore skip the live canary; they still run the offline gates.
 
-Before live tests run, the canary also compares sanitized response shapes from the local API bridge against `test/fixtures/live-drift-baseline.json` and uploads `reports/live-drift.json`. Missing surfaces or required fields fail with `proton_api_drift`; additive fields are reported for review but do not fail the canary. Drift reports must contain only schema metadata and next-action guidance, never cookies, bearer tokens, event contents, or raw Proton payloads.
+After live tests run, the canary compares sanitized response shapes from the local API bridge against `test/fixtures/live-drift-baseline.json` and uploads `reports/live-drift.json`. Missing surfaces or required fields fail with `proton_api_drift`; additive fields are reported for review but do not fail the canary. Drift reports must contain only schema metadata and next-action guidance, never cookies, bearer tokens, event contents, or raw Proton payloads.
 
 ## Releases
 
