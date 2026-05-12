@@ -156,10 +156,14 @@ jobs:
           retention-days: 14
 
   live-proton-canary:
-    name: Optional live Proton canary
+    name: Required live Proton canary
     runs-on: ubuntu-latest
     timeout-minutes: 30
-    if: github.event_name == 'workflow_dispatch' || github.event_name == 'schedule'
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      github.event_name == 'schedule' ||
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
+      (github.event_name == 'pull_request' && github.event.pull_request.head.repo.full_name == github.repository)
 
     steps:
       - name: Checkout
@@ -180,21 +184,17 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
-      - name: Skip when live secrets are absent
-        id: live-secrets
+      - name: Require live secrets
         env:
           PROTON_USERNAME: ${{ secrets.PROTON_USERNAME }}
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
         run: |
           if [ -z "$PROTON_USERNAME" ] || [ -z "$PROTON_PASSWORD" ]; then
-            echo "enabled=false" >> "$GITHUB_OUTPUT"
-            echo "Live Proton canary skipped because PROTON_USERNAME or PROTON_PASSWORD is not configured."
-          else
-            echo "enabled=true" >> "$GITHUB_OUTPUT"
+            echo "::error::Required live Proton canary secrets PROTON_USERNAME and PROTON_PASSWORD must be configured for trusted CI runs."
+            exit 1
           fi
 
       - name: Bootstrap Proton session
-        if: steps.live-secrets.outputs.enabled == 'true'
         env:
           PROTON_USERNAME: ${{ secrets.PROTON_USERNAME }}
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
@@ -204,7 +204,7 @@ jobs:
         run: pnpm run ci:live
 
       - name: Upload live triage report
-        if: always() && steps.live-secrets.outputs.enabled == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-proton-triage
@@ -213,7 +213,7 @@ jobs:
           retention-days: 7
 
       - name: Upload live drift report
-        if: always() && steps.live-secrets.outputs.enabled == 'true'
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: live-proton-drift
