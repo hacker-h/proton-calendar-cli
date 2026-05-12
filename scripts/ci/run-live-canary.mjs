@@ -63,8 +63,8 @@ export async function main(env = process.env) {
 
   try {
     await runStage("api-start", () => waitForApi(apiBaseUrl, readPositiveNumber(liveEnv.CI_LIVE_API_TIMEOUT_MS, DEFAULT_HEALTH_TIMEOUT_MS)));
-    await runStage("drift-snapshot", () => runLiveDriftSnapshot({ apiBaseUrl, env: liveEnv }));
     await runStage("live-tests", () => runCommand(pnpmCommand(), ["run", "test:live"], { env: liveEnv }));
+    await runStage("drift-snapshot", () => runLiveDriftSnapshot({ apiBaseUrl, env: liveEnv }));
   } finally {
     await stopServer(server);
   }
@@ -230,6 +230,13 @@ export function buildLiveDriftReport({ baseline, current, env = {} }) {
   };
 }
 
+export function assertSafeLiveDriftReport(report) {
+  const serialized = JSON.stringify(report);
+  if (/rawPayload|AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+|"cookie"\s*:\s*\{[^}]*"value"|"blob"\s*:/i.test(serialized)) {
+    throw new LiveDriftSafetyError();
+  }
+}
+
 async function waitForApi(apiBaseUrl, timeoutMs) {
   const deadline = Date.now() + timeoutMs;
   let lastError = null;
@@ -268,7 +275,7 @@ async function runLiveDriftSnapshot({ apiBaseUrl, env }) {
   const current = sanitizeDriftSnapshot(rawCurrent);
   const report = buildLiveDriftReport({ baseline, current, env });
 
-  assertSafeDiagnostics(report);
+  assertSafeLiveDriftReport(report);
   await mkdir(path.dirname(reportPath), { recursive: true });
   await writeFile(reportPath, `${JSON.stringify({ data: report }, null, 2)}\n`, { mode: 0o600 });
 
@@ -585,5 +592,12 @@ class LiveDriftError extends Error {
     super("Proton API drift snapshot detected breaking schema differences");
     this.exitCode = 1;
     this.driftReport = report;
+  }
+}
+
+class LiveDriftSafetyError extends Error {
+  constructor() {
+    super("Live drift report contains unsafe diagnostics");
+    this.exitCode = 80;
   }
 }

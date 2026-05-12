@@ -6,6 +6,7 @@ import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import {
+  assertSafeLiveDriftReport,
   buildDriftShape,
   buildLiveDriftReport,
   classifyLiveCanaryFailure,
@@ -15,6 +16,20 @@ import {
 } from "../scripts/ci/run-live-canary.mjs";
 
 const execFileAsync = promisify(execFile);
+
+test("CI requires live Proton canary for trusted runs", async () => {
+  const workflow = await readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
+
+  assert.match(workflow, /name: Required live Proton canary/);
+  assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
+  assert.match(workflow, /github\.event_name == 'schedule'/);
+  assert.match(workflow, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
+  assert.match(workflow, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
+  assert.match(workflow, /name: Require live secrets/);
+  assert.match(workflow, /Required live Proton canary secrets PROTON_USERNAME and PROTON_PASSWORD must be configured/);
+  assert.doesNotMatch(workflow, /Optional live Proton canary/);
+  assert.doesNotMatch(workflow, /steps\.live-secrets/);
+});
 
 test("parseEnvFile reads quoted live canary environment", () => {
   assert.deepEqual(parseEnvFile('API_BEARER_TOKEN="token"\nPC_API_BASE_URL="http://127.0.0.1:8787"\n# comment\n'), {
@@ -203,6 +218,23 @@ test("live drift snapshots compare sanitized response shapes", () => {
   assert.equal(serialized.includes("evt-secret-title"), false);
   assert.equal(serialized.includes("Private"), false);
   assert.equal(serialized.includes("https://github.com/hacker-h/proton-calendar-cli/actions/runs/1"), true);
+});
+
+test("live drift report safety allows schema-only uid keys but blocks raw secrets", () => {
+  assert.doesNotThrow(() => assertSafeLiveDriftReport({
+    current: {
+      surfaces: [
+        {
+          id: "auth.status",
+          endpoint: "/v1/auth/status",
+          shape: buildDriftShape({ data: { uid: "redacted-to-shape" } }),
+        },
+      ],
+    },
+  }));
+
+  assert.throws(() => assertSafeLiveDriftReport({ current: { surfaces: [{ rawPayload: { cookie: { value: "secret" } } }] } }));
+  assert.throws(() => assertSafeLiveDriftReport({ current: { token: "Bearer abc.def" } }));
 });
 
 test("live drift array item comparison: empty actual skips item validation non-breaking", () => {
