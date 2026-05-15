@@ -22,8 +22,8 @@ import {
 const DEFAULT_TIMEOUT_SECONDS = 600;
 const DEFAULT_POLL_SECONDS = 3;
 
-async function main() {
-  const options = parseArgs(process.argv.slice(2));
+export async function main(argv = process.argv.slice(2)) {
+  const options = parseArgs(argv);
   const chromePath = options.chromePath || defaultChromePath();
 
   if (!chromePath || !(await fileExists(chromePath))) {

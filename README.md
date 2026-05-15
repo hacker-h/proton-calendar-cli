@@ -251,6 +251,30 @@ Releases are automated from the GitHub `main` branch with semantic-release.
 Merge Conventional Commit messages such as `feat: ...`, `fix: ...`, or
 `feat!: ...` to `main` to create the next GitHub release and `v<version>` tag.
 
+Each GitHub release attaches standalone `pc` binaries and SHA-256 checksum files
+for these platforms:
+
+| Asset | Platform |
+| --- | --- |
+| `pc-linux-x64` | Linux x64 |
+| `pc-macos-arm64` | macOS Apple Silicon |
+| `pc-macos-x64` | macOS Intel |
+| `pc-windows-x64.exe` | Windows x64 |
+
+Download the asset for your platform, verify the sibling `.sha256` file, make it
+executable on POSIX systems, and place it on your `PATH` as `pc`. Example:
+
+```bash
+sha256sum -c pc-linux-x64.sha256
+chmod +x pc-linux-x64
+./pc-linux-x64 --help
+```
+
+Release CI smoke-tests each generated binary with `pc --help` and a JSON
+configuration-error path before uploading it. The binaries embed only the CLI
+code and runtime dependencies; Proton credentials, cookie bundles, local config
+files, `.env` files, and `secrets/` contents are never embedded.
+
 semantic-release also updates `CHANGELOG.md` and commits that changelog update
 back to `main` with `[skip ci]`. npm publishing is not enabled. The release
 workflow only proves npm publish readiness with dry-run commands that strip npm
