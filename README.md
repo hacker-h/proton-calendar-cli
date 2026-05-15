@@ -87,9 +87,11 @@ Supported event fields:
 - `allDay`
 - `protected` (defaults to `true`; set `false` to allow shared-calendar members to edit)
 - `recurrence` with `freq`, `interval`, `count`, `until`, `byDay`, `byMonthDay`, `weekStart`, `exDates`
+- `reminder` as a single friendly reminder such as `10m`, `1h`, or `2d`
+- `reminders` as comma-separated friendly app reminders such as `10m,1h`
 - `notifications` as `null` or an array of up to 10 Proton-compatible notification objects; omitted `pc edit`/PATCH fields preserve existing notifications, and `notifications=null` clears event-specific notifications
 
-Raw notification objects are passed through to Proton. A tested reminder shape is `[{"Type":1,"Trigger":"-PT10M"}]`, used from the CLI as `notifications='[{"Type":1,"Trigger":"-PT10M"}]'`. Use `notifications=null` or `pc edit --clear notifications` to clear event-specific reminders. Friendly aliases such as `reminder=10m` are tracked in #134 and are not implemented yet.
+Friendly reminders compile to raw Proton notification objects before the API calls Proton: `reminder=10m` becomes `[{"Type":1,"Trigger":"-PT10M"}]`, and `reminders=10m,1h` becomes `[{"Type":1,"Trigger":"-PT10M"},{"Type":1,"Trigger":"-PT1H"}]`. Supported durations are positive integers with `m`, `h`, or `d`. Only default app reminders are supported in friendly syntax; channel-prefixed values such as `email:1h` are rejected because Proton rejected the generated Type 2 shape in live testing. Raw notification objects are still passed through to Proton, for example `notifications='[{"Type":1,"Trigger":"-PT10M"}]'`. Do not combine `reminder`/`reminders` with `notifications` in the same mutation. Use `notifications=null` or `pc edit --clear notifications` to clear event-specific reminders.
 
 For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
 For monthly `byMonthDay`, values past the end of a shorter month fall back to that month's last day, so a `31` rule emits Feb 28/29 and Apr 30 instead of silently skipping those months.
@@ -285,7 +287,7 @@ pnpm run release:dry-run
 - List pagination uses `nextCursor` for output continuation only; broad date ranges still fetch, decode, expand recurrences, and sort the whole requested range before slicing the returned page.
 - `recurrence.count` and `recurrence.until` cannot both be set.
 - Proton currently rejects `scope=following` deletes in live recurrence tests with an upstream `UPSTREAM_ERROR`; use `scope=single` or `scope=series` deletes until that private API behavior is confirmed.
-- Reminder controls use Proton-compatible `Notifications` objects directly; no friendly reminder builder, attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
+- Reminder controls support common friendly syntax and Proton-compatible `Notifications` objects directly; no attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
 
 ## License
