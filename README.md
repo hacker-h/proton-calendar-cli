@@ -282,6 +282,7 @@ pnpm run release:dry-run
 - Rate limits and `Retry-After` behavior are controlled by Proton and should stop automation until backoff expires.
 - List pagination uses `nextCursor` for output continuation only; broad date ranges still fetch, decode, expand recurrences, and sort the whole requested range before slicing the returned page.
 - `recurrence.count` and `recurrence.until` cannot both be set.
+- Proton currently rejects `scope=following` deletes in live recurrence tests with an upstream `UPSTREAM_ERROR`; use `scope=single` or `scope=series` deletes until that private API behavior is confirmed.
 - Reminder controls use Proton-compatible `Notifications` objects directly; no friendly reminder builder, attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
 

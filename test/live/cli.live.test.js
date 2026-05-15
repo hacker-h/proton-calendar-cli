@@ -27,6 +27,7 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await testTimedUtcCrud(env);
     await testTimedBerlinCrud(env);
     await testAllDayUtc(env);
+    await testRecurrenceCrud(env);
   } finally {
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
@@ -186,6 +187,72 @@ async function testAllDayUtc(env) {
   assert.equal(match.end, "2026-03-24T00:00:00.000Z");
 }
 
+async function testRecurrenceCrud(env) {
+  const title = buildEventTitle(config, "cli-recur-daily");
+  const create = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${title}`,
+    "description=live cli recurrence",
+    "location=CLI Recurrence",
+    "start=2026-03-26T09:00:00.000Z",
+    "end=2026-03-26T09:30:00.000Z",
+    "timezone=UTC",
+    "recurrence.freq=DAILY",
+    "recurrence.count=4",
+  ], env);
+  assert.equal(create.exitCode, 0);
+  assert.equal(create.payload.data.recurrence.freq, "DAILY");
+  assert.equal(create.payload.data.recurrence.count, 4);
+  const eventId = create.payload.data.id;
+
+  const list = await runJsonCli([
+    "ls",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--start",
+    "2026-03-26T00:00:00.000Z",
+    "--end",
+    "2026-03-31T00:00:00.000Z",
+    "--title",
+    title,
+  ], env);
+  assert.equal(list.exitCode, 0);
+  assert.deepEqual(occurrenceStarts(list.payload.data.events, title), [
+    "2026-03-26T09:00:00.000Z",
+    "2026-03-27T09:00:00.000Z",
+    "2026-03-28T09:00:00.000Z",
+    "2026-03-29T09:00:00.000Z",
+  ]);
+
+  const singleTitle = buildEventTitle(config, "cli-recur-single-edit");
+  const singleEdit = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--scope",
+    "single",
+    "--at",
+    "2026-03-27T09:00:00.000Z",
+    `title=${singleTitle}`,
+    "location=CLI Single Recurrence",
+  ], env);
+  assert.equal(singleEdit.exitCode, 0);
+  assert.equal(singleEdit.payload.data.title, singleTitle);
+  assert.equal(singleEdit.payload.data.location, "CLI Single Recurrence");
+
+  const deleteFollowing = await runJsonCli([
+    "rm",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--scope",
+    "following",
+    "--at",
+    "2026-03-28T09:00:00.000Z",
+  ], env);
+  assert.equal(deleteFollowing.exitCode, 5);
+  assert.equal(deleteFollowing.payload.error.code, "UPSTREAM_ERROR");
+}
+
 async function runJsonCli(argv, env = {
   PC_API_BASE_URL: config.apiBaseUrl,
   PC_API_TOKEN: config.apiToken,
@@ -221,4 +288,11 @@ function findCliEvent(events, title) {
   const match = events.find((event) => event.title === title);
   assert.ok(match, `expected live event ${title} in CLI list response`);
   return match;
+}
+
+function occurrenceStarts(events, title) {
+  return events
+    .filter((event) => event.title === title)
+    .map((event) => event.occurrenceStart || event.start)
+    .sort();
 }
