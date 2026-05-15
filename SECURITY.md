@@ -17,7 +17,7 @@ Please report vulnerabilities privately through GitHub security advisories when 
 
 ## CI Safety
 
-Pull-request CI must stay no-quota and credential-free. Live Proton canaries should run only on scheduled/manual workflows using a dedicated empty test account and sanitized logs.
+Fork pull-request CI must stay no-quota and credential-free because repository secrets are unavailable and untrusted code must not receive Proton credentials. Trusted CI contexts, including same-repository pull requests, pushes to `main`, scheduled runs, and manual runs, may run the live Proton canary with dedicated test-account secrets and sanitized logs.
 
 GitLab live credentials must be protected and masked, and live jobs must run only on protected runners/branches. Do not upload cookie bundles, generated `ci-live.env` files, browser profiles, or API bearer tokens as artifacts. Keep unavoidable CI artifacts limited to sanitized reports such as JUnit XML with short expiration.
 
