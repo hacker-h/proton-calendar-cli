@@ -1,3 +1,17 @@
+# [1.7.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.6.0...v1.7.0) (2026-05-15)
+
+
+### Bug Fixes
+
+* **config:** load dotenv in app entrypoints ([633d432](https://github.com/hacker-h/proton-calendar-cli/commit/633d432e65b777f9a3960c88bd06e466f8f1f2fd))
+* **proton:** support persisted-session UID splits ([0f72d95](https://github.com/hacker-h/proton-calendar-cli/commit/0f72d9524e299c24dd80fbb98d6d07c9058f69d8))
+* **proton:** update private API auth headers ([21d5b23](https://github.com/hacker-h/proton-calendar-cli/commit/21d5b23c898d0adb43871570412647fa0cbf96de))
+
+
+### Features
+
+* **config:** add dotenv credential loader ([aaa0ac0](https://github.com/hacker-h/proton-calendar-cli/commit/aaa0ac070d41bad59a0a162d144acc55ee9b958f))
+
 # [1.6.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.5.0...v1.6.0) (2026-05-11)
 
 
