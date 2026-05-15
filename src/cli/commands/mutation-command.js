@@ -4,6 +4,7 @@ import { parseJsonObject, requestJson } from "../api-client.js";
 import { CLEARABLE_FIELDS, VALID_TIMEZONES } from "../constants.js";
 import { validateStartBeforeEnd } from "../date-range.js";
 import { CliError } from "../errors.js";
+import { normalizeFriendlyReminderFields } from "../../reminders.js";
 
 export async function runCreateCommand(args, context) {
   const parsed = await parseMutationArgs(args, { requireEventId: false });
@@ -184,7 +185,7 @@ async function parseMutationArgs(args, options = {}) {
   const patchFromInput = state.patchInput ? await parsePatchInput(state.patchInput) : {};
   const assignmentPatch = buildPatchFromAssignments(state.assignments);
 
-  const patch = {
+  let patch = {
     ...patchFromInput,
     ...assignmentPatch,
   };
@@ -196,6 +197,8 @@ async function parseMutationArgs(args, options = {}) {
   for (const field of state.clearFields) {
     patch[field] = field === "notifications" ? null : "";
   }
+
+  patch = normalizeFriendlyReminderFields(patch, invalidReminderError);
 
   validateStringPatchValues(patch, state.clearFields);
   validateTimezonePatch(patch);
@@ -209,6 +212,11 @@ async function parseMutationArgs(args, options = {}) {
     dryRun: state.dryRun,
     patch,
   };
+}
+
+
+function invalidReminderError(message) {
+  return new CliError("INVALID_REMINDERS", message);
 }
 
 
