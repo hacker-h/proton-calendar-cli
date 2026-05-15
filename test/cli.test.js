@@ -1,7 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { createHash } from "node:crypto";
+import { chmod, mkdtemp, readdir, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
@@ -1803,6 +1804,211 @@ test("help works with leading -- separator", async () => {
   assert.equal(exitCode, 0);
   assert.equal(stderr.value(), "");
   assert.equal(stdout.value().includes("pc - Proton Calendar CLI"), true);
+  assert.equal(stdout.value().includes("pc update [--check] [--version <tag>]"), true);
+});
+
+test("update --check reports current binary from matching release checksum", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-current-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  const binary = Buffer.from("current-binary");
+  await writeFile(execPath, binary, { mode: 0o755 });
+  const checksum = sha256ForTest(binary);
+  const stdout = createWriter();
+
+  const exitCode = await runPcCli(["update", "--check"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum }),
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.update, "current");
+  assert.equal(payload.data.updateAvailable, false);
+  assert.equal(payload.data.version, "v1.9.0");
+});
+
+test("update --check supports explicit release tag lookup", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-version-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  const binary = Buffer.from("current-binary");
+  await writeFile(execPath, binary, { mode: 0o755 });
+  const requestedUrls = [];
+  const stdout = createWriter();
+
+  const exitCode = await runPcCli(["update", "--check", "--version", "1.8.0"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum: sha256ForTest(Buffer.from("new-binary")), requestedUrls }),
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requestedUrls[0].endsWith("/releases/tags/v1.8.0"), true);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.update, "available");
+  assert.equal(payload.data.updateAvailable, true);
+});
+
+test("update fails safely for npm and source installs", async () => {
+  const stdout = createWriter();
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["update", "--check"], {
+    env: {},
+    execPath: process.execPath,
+    fetchImpl: async () => {
+      throw new Error("should not fetch releases");
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(stdout.value(), "");
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "UPDATE_UNSUPPORTED");
+});
+
+test("update verifies checksum before replacing binary", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-checksum-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  await writeFile(execPath, "current-binary", { mode: 0o755 });
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["update"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum: sha256ForTest(Buffer.from("expected-binary")), binary: Buffer.from("tampered-binary") }),
+    smokeBinary: async () => {
+      throw new Error("should not smoke before checksum passes");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(await readFile(execPath, "utf8"), "current-binary");
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "UPDATE_CHECKSUM_MISMATCH");
+});
+
+test("update no-ops when current binary already matches without --check", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-noop-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  const binary = Buffer.from("current-binary");
+  await writeFile(execPath, binary, { mode: 0o755 });
+  const requestedUrls = [];
+  const stdout = createWriter();
+
+  const exitCode = await runPcCli(["update"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum: sha256ForTest(binary), requestedUrls }),
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(await readFile(execPath, "utf8"), "current-binary");
+  assert.equal(requestedUrls.includes("https://downloads.example/pc-linux-x64"), false);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.update, "current");
+  assert.equal(payload.data.updateAvailable, false);
+});
+
+test("update removes temp binary when smoke check fails", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-smoke-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  const binary = Buffer.from("replacement-binary");
+  await writeFile(execPath, "current-binary", { mode: 0o755 });
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["update"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum: sha256ForTest(binary), binary }),
+    smokeBinary: async () => {
+      throw new Error("bad binary");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 1);
+  assert.equal(await readFile(execPath, "utf8"), "current-binary");
+  assert.deepEqual(await readdir(tmpDir), ["pc-linux-x64"]);
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "UPDATE_FAILED");
+});
+
+test("update refuses Windows helper paths with cmd metacharacters", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-win&test-"));
+  const execPath = path.join(tmpDir, "pc.exe");
+  const binary = Buffer.from("replacement-binary");
+  await writeFile(execPath, "current-binary", { mode: 0o755 });
+  const stderr = createWriter();
+
+  const exitCode = await runPcCli(["update"], {
+    env: {},
+    execPath,
+    platform: "win32",
+    arch: "x64",
+    fetchImpl: releaseFetch({ assetName: "pc-windows-x64.exe", checksum: sha256ForTest(binary), binary }),
+    smokeBinary: async () => {},
+    spawnImpl: () => {
+      throw new Error("should not spawn unsafe cmd helper");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(await readFile(execPath, "utf8"), "current-binary");
+  const payload = JSON.parse(stderr.value());
+  assert.equal(payload.error.code, "UPDATE_UNSUPPORTED");
+});
+
+test("update installs verified binary on POSIX platforms", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-update-install-test-"));
+  const execPath = path.join(tmpDir, "pc-linux-x64");
+  const binary = Buffer.from("replacement-binary");
+  await writeFile(execPath, "current-binary", { mode: 0o755 });
+  const stdout = createWriter();
+  const smoked = [];
+
+  const exitCode = await runPcCli(["update"], {
+    env: {},
+    execPath,
+    platform: "linux",
+    arch: "x64",
+    fetchImpl: releaseFetch({ checksum: sha256ForTest(binary), binary }),
+    smokeBinary: async (file) => {
+      smoked.push(file);
+      assert.equal(await readFile(file, "utf8"), "replacement-binary");
+    },
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(await readFile(execPath, "utf8"), "replacement-binary");
+  assert.equal(smoked.length, 1);
+  const payload = JSON.parse(stdout.value());
+  assert.equal(payload.data.update, "installed");
 });
 
 test("edit supports --patch @file and assignment overrides", async () => {
@@ -2400,6 +2606,52 @@ function jsonResponse(status, payload, headers = []) {
     status,
     headers: [["Content-Type", "application/json"], ...headers],
   });
+}
+
+function textResponse(status, text) {
+  return new Response(text, { status });
+}
+
+function binaryResponse(status, data) {
+  return new Response(data, { status });
+}
+
+function sha256ForTest(data) {
+  return createHash("sha256").update(data).digest("hex");
+}
+
+function releaseFetch(options) {
+  const assetName = options.assetName || "pc-linux-x64";
+  const checksumName = `${assetName}.sha256`;
+  const binary = options.binary || Buffer.from("new-binary");
+  return async (url) => {
+    const rawUrl = String(url);
+    options.requestedUrls?.push(rawUrl);
+    if (rawUrl.includes("api.github.com/repos/hacker-h/proton-calendar-cli/releases/")) {
+      return jsonResponse(200, {
+        tag_name: "v1.9.0",
+        assets: [
+          {
+            name: assetName,
+            size: binary.length,
+            browser_download_url: `https://downloads.example/${assetName}`,
+          },
+          {
+            name: checksumName,
+            size: 64,
+            browser_download_url: `https://downloads.example/${checksumName}`,
+          },
+        ],
+      });
+    }
+    if (rawUrl === `https://downloads.example/${checksumName}`) {
+      return textResponse(200, `${options.checksum}  ${assetName}\n`);
+    }
+    if (rawUrl === `https://downloads.example/${assetName}`) {
+      return binaryResponse(200, binary);
+    }
+    throw new Error(`Unexpected update fetch: ${rawUrl}`);
+  };
 }
 
 async function writeLoginCookieBundle(cookieBundlePath) {
