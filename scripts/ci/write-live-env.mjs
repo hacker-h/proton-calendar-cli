@@ -6,6 +6,7 @@ import path from "node:path";
 
 const cookieBundleRelativePath = "secrets/proton-cookies.json";
 const cookieBundlePath = path.resolve(process.env.COOKIE_BUNDLE_PATH || cookieBundleRelativePath);
+const cookieBundleEnvPath = formatCookieBundleEnvPath(cookieBundlePath);
 const outputPath = path.resolve(process.env.CI_LIVE_ENV_PATH || "secrets/ci-live.env");
 
 const bundle = JSON.parse(await readFile(cookieBundlePath, "utf8"));
@@ -29,7 +30,7 @@ const protonBaseUrl = String(process.env.PROTON_BASE_URL || "https://calendar.pr
 const apiBaseUrl = String(process.env.PC_API_BASE_URL || "http://127.0.0.1:8787").trim();
 
 const lines = [
-  `COOKIE_BUNDLE_PATH=${quote(cookieBundleRelativePath)}`,
+  `COOKIE_BUNDLE_PATH=${quote(cookieBundleEnvPath)}`,
   `TARGET_CALENDAR_ID=${quote(configuredCalendarId)}`,
   `DEFAULT_CALENDAR_ID=${quote(configuredCalendarId)}`,
   `ALLOWED_CALENDAR_IDS=${quote(allowedCalendarIds.join(","))}`,
@@ -51,9 +52,14 @@ console.log(JSON.stringify({
     outputPath,
     calendarId: configuredCalendarId,
     allowedCalendarIds,
-    cookieBundlePath: cookieBundleRelativePath,
+    cookieBundlePath: cookieBundleEnvPath,
   },
 }, null, 2));
+
+function formatCookieBundleEnvPath(filePath) {
+  const relative = path.relative(process.cwd(), filePath);
+  return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath;
+}
 
 function quote(value) {
   return `"${String(value).replaceAll('"', '\\"')}"`;

@@ -160,7 +160,9 @@
                     "updatedAt": {
                       "type": "unknown"
                     },
-                    "notifications": null
+                    "notifications": {
+                      "type": "unknown"
+                    }
                   }
                 }
               },
