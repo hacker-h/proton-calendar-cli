@@ -1,3 +1,10 @@
+# [1.11.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.10.0...v1.11.0) (2026-05-15)
+
+
+### Features
+
+* **cli:** add one-line release installer ([4e8bf52](https://github.com/hacker-h/proton-calendar-cli/commit/4e8bf52cc7c6a41fd4c1e72091b41e89d0b9841d))
+
 # [1.10.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.9.0...v1.10.0) (2026-05-15)
 
 
