@@ -51,6 +51,7 @@ pc logout
 | --- | --- | --- |
 | `pc login` | Browser login, cookie export, CLI/server config generation | `pc login --default-calendar cal_123` |
 | `pc logout` | Remove local CLI/server/cookie secret files and relogin sidecars | `pc logout` |
+| `pc update` | Check or replace a standalone release binary from GitHub Releases | `pc update --check` |
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
 | `pc calendars` | List discovered calendars and configured defaults | `pc calendars -o table` |
 | `pc ls` | List events; defaults to current ISO week | `pc ls next 7 --title review` |
@@ -269,6 +270,22 @@ sha256sum -c pc-linux-x64.sha256
 chmod +x pc-linux-x64
 ./pc-linux-x64 --help
 ```
+
+Standalone release binaries can update themselves from GitHub Releases:
+
+```bash
+pc update --check
+pc update
+pc update --version v1.9.0
+```
+
+`pc update` selects the release asset for the current OS/architecture, downloads
+the sibling `.sha256` file, verifies the downloaded binary, smoke-checks
+`--help`, and then replaces the current executable. It fails safely for npm,
+source checkout, symlinked, and unsupported-platform installs; update those with
+their package manager or by downloading a release asset manually. On Windows the
+replacement is scheduled through a short helper because running `.exe` files
+cannot be overwritten in place.
 
 Release CI smoke-tests each generated binary with `pc --help` and a JSON
 configuration-error path before uploading it. The binaries embed only the CLI

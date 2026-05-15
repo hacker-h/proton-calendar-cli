@@ -13,6 +13,7 @@ export const HELP_TEXT = `pc - Proton Calendar CLI
 Usage:
   pc login [options]
   pc logout [options]
+  pc update [--check] [--version <tag>]
   pc doctor auth [options]
   pc calendars [options]
   pc ls [today|tomorrow|next N|w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
@@ -23,6 +24,7 @@ Usage:
 Examples:
   pc login
   pc logout
+  pc update --check
   pc doctor auth
   pc calendars
   pc ls
@@ -69,6 +71,10 @@ Logout options:
   --cookie-bundle <path>  Cookie bundle path to remove
   --pc-config <path>      Local CLI config path to remove
   --server-env <path>     Server env path to remove
+
+Update options:
+  --check          Check the selected GitHub release without replacing the binary
+  --version <tag>  Install or check a specific release tag, e.g. v1.9.0
 
 Doctor options:
   --cookie-bundle <path>  Cookie bundle path to inspect

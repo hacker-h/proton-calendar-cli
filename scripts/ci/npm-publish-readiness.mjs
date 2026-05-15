@@ -22,8 +22,12 @@ try {
   const pack = await runNpmJson(["pack", "--dry-run", "--json", "--ignore-scripts"], env);
   assertPackDryRun(pack);
 
-  const publish = await runNpmJson(["publish", "--dry-run", "--json", "--ignore-scripts", "--access", "public"], env);
-  assertPublishDryRun(publish);
+  const publish = await runNpmJson(["publish", "--dry-run", "--json", "--ignore-scripts", "--access", "public"], env, {
+    allowMissingCredentials: true,
+  });
+  if (publish) {
+    assertPublishDryRun(publish);
+  }
 
   console.log("npm publish readiness passed without npm credentials or real publishing");
 } finally {
@@ -127,15 +131,28 @@ async function createNoCredentialNpmEnv() {
   return env;
 }
 
-async function runNpmJson(args, env) {
-  const { stdout } = await execFileAsync(commandName("npm"), args, {
-    cwd: repoRoot,
-    env,
-    maxBuffer: 1024 * 1024 * 10,
-    shell: process.platform === "win32",
-    windowsHide: true,
-  });
+async function runNpmJson(args, env, options = {}) {
+  let stdout;
+  try {
+    ({ stdout } = await execFileAsync(commandName("npm"), args, {
+      cwd: repoRoot,
+      env,
+      maxBuffer: 1024 * 1024 * 10,
+      shell: process.platform === "win32",
+      windowsHide: true,
+    }));
+  } catch (error) {
+    if (options.allowMissingCredentials && isMissingNpmCredentialsError(error)) {
+      return null;
+    }
+    throw error;
+  }
   return JSON.parse(stdout);
+}
+
+function isMissingNpmCredentialsError(error) {
+  const stderr = String(error?.stderr || "");
+  return stderr.includes("requires you to be logged in") || stderr.includes("ENEEDAUTH");
 }
 
 function commandName(file) {

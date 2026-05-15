@@ -13,6 +13,7 @@ import { runCalendarsCommand } from "./cli/commands/calendars-command.js";
 import { runDoctorCommand } from "./cli/commands/doctor-command.js";
 import { runLoginCommand } from "./cli/commands/login-command.js";
 import { runLogoutCommand } from "./cli/commands/logout-command.js";
+import { runUpdateCommand } from "./cli/commands/update-command.js";
 
 export async function runPcCli(argv, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
@@ -53,6 +54,20 @@ export async function runPcCli(argv, options = {}) {
 
     if (command === "logout") {
       const result = await runLogoutCommand(rest, { env });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
+    if (command === "update") {
+      const result = await runUpdateCommand(rest, {
+        env,
+        fetchImpl,
+        execPath: options.execPath,
+        platform: options.platform,
+        arch: options.arch,
+        smokeBinary: options.smokeBinary,
+        spawnImpl: options.spawnImpl,
+      });
       writeOutput(stdout, result.output, result.payload);
       return 0;
     }
