@@ -10,6 +10,7 @@ export default defineConfig([
     ".sisyphus/",
     ".tmp/",
     "coverage/",
+    "dist/",
     "node_modules/",
     "reports/",
     "secrets/",
