@@ -82,6 +82,28 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(invalid.body.error.code, "INVALID_TIME_RANGE");
     });
 
+    await t.test("invalid recurrence payloads return stable validation errors", async () => {
+      const badFrequency = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: buildEventTitle(config, "invalid-recurrence-frequency"),
+        start: "2026-03-06T10:00:00.000Z",
+        end: "2026-03-06T10:30:00.000Z",
+        timezone: "UTC",
+        recurrence: { freq: "HOURLY" },
+      });
+      assert.equal(badFrequency.status, 400);
+      assert.equal(badFrequency.body.error.code, "INVALID_RECURRENCE");
+
+      const badWeeklyByDay = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: buildEventTitle(config, "invalid-weekly-byday"),
+        start: "2026-03-06T11:00:00.000Z",
+        end: "2026-03-06T11:30:00.000Z",
+        timezone: "UTC",
+        recurrence: { freq: "WEEKLY", byDay: ["+1MO"] },
+      });
+      assert.equal(badWeeklyByDay.status, 400);
+      assert.equal(badWeeklyByDay.body.error.code, "INVALID_RECURRENCE");
+    });
+
     await t.test("timed UTC event round trips protected, notifications, and clearable fields", async () => {
       const title = buildEventTitle(config, "timed-utc");
       const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
@@ -309,6 +331,127 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(detachedDelete.status, 200);
     });
 
+    await t.test("recurrence matrix covers frequency options and supported rule fields", async () => {
+      const dailyTitle = buildEventTitle(config, "recur-daily-interval-exdate");
+      const daily = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: dailyTitle,
+        start: "2026-03-10T09:00:00.000Z",
+        end: "2026-03-10T09:30:00.000Z",
+        timezone: "UTC",
+        recurrence: {
+          freq: "DAILY",
+          interval: 2,
+          count: 3,
+          exDates: ["2026-03-12T09:00:00.000Z"],
+        },
+      });
+      assert.equal(daily.status, 201);
+      assert.equal(daily.body.data.recurrence.freq, "DAILY");
+      assert.equal(daily.body.data.recurrence.interval, 2);
+      assert.deepEqual(daily.body.data.recurrence.exDates, ["2026-03-12T09:00:00.000Z"]);
+
+      const weeklyTitle = buildEventTitle(config, "recur-weekly-berlin-dst");
+      const weekly = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: weeklyTitle,
+        start: "2026-03-23T08:00:00.000Z",
+        end: "2026-03-23T08:30:00.000Z",
+        timezone: "Europe/Berlin",
+        recurrence: {
+          freq: "WEEKLY",
+          count: 3,
+          byDay: ["MO"],
+          weekStart: "MO",
+        },
+      });
+      assert.equal(weekly.status, 201);
+      assert.equal(weekly.body.data.recurrence.freq, "WEEKLY");
+      assert.deepEqual(weekly.body.data.recurrence.byDay, ["MO"]);
+      assert.equal(weekly.body.data.recurrence.weekStart, "MO");
+
+      const monthlyTitle = buildEventTitle(config, "recur-monthly-bymonthday");
+      const monthly = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: monthlyTitle,
+        start: "2026-03-31T10:00:00.000Z",
+        end: "2026-03-31T10:30:00.000Z",
+        timezone: "UTC",
+        recurrence: {
+          freq: "MONTHLY",
+          count: 2,
+          byMonthDay: [31],
+        },
+      });
+      assert.equal(monthly.status, 201);
+      assert.equal(monthly.body.data.recurrence.freq, "MONTHLY");
+      assert.deepEqual(monthly.body.data.recurrence.byMonthDay, [31]);
+
+      const yearlyTitle = buildEventTitle(config, "recur-yearly-until");
+      const yearly = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: yearlyTitle,
+        start: "2026-03-15T12:00:00.000Z",
+        end: "2026-03-15T12:30:00.000Z",
+        timezone: "UTC",
+        recurrence: {
+          freq: "YEARLY",
+          until: "2027-03-16T00:00:00.000Z",
+        },
+      });
+      assert.equal(yearly.status, 201);
+      assert.equal(yearly.body.data.recurrence.freq, "YEARLY");
+      assert.equal(yearly.body.data.recurrence.until, "2027-03-16T00:00:00.000Z");
+
+      const marchToMay = await apiRequest(
+        config,
+        "GET",
+        buildCollectionRoute(config, {
+          start: "2026-03-01T00:00:00.000Z",
+          end: "2026-05-01T00:00:00.000Z",
+          limit: 100,
+        })
+      );
+      assert.equal(marchToMay.status, 200);
+      assert.deepEqual(occurrenceStarts(marchToMay.body.data.events, dailyTitle), [
+        "2026-03-10T09:00:00.000Z",
+        "2026-03-14T09:00:00.000Z",
+        "2026-03-16T09:00:00.000Z",
+      ]);
+      assert.deepEqual(occurrenceStarts(marchToMay.body.data.events, weeklyTitle), [
+        "2026-03-23T08:00:00.000Z",
+        "2026-03-30T07:00:00.000Z",
+        "2026-04-06T07:00:00.000Z",
+      ]);
+      assert.deepEqual(occurrenceStarts(marchToMay.body.data.events, monthlyTitle), [
+        "2026-03-31T10:00:00.000Z",
+        "2026-04-30T10:00:00.000Z",
+      ]);
+      assert.deepEqual(occurrenceStarts(marchToMay.body.data.events, yearlyTitle), ["2026-03-15T12:00:00.000Z"]);
+    });
+
+    await t.test("scope=following delete reports current Proton upstream limitation", async () => {
+      const title = buildEventTitle(config, "following-delete");
+      const recurring = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title,
+        start: "2026-03-25T12:00:00.000Z",
+        end: "2026-03-25T12:30:00.000Z",
+        timezone: "UTC",
+        recurrence: {
+          freq: "DAILY",
+          count: 4,
+        },
+      });
+      assert.equal(recurring.status, 201);
+
+      const deleteFollowing = await apiRequest(
+        config,
+        "DELETE",
+        buildEventRoute(config, recurring.body.data.id, {
+          scope: "following",
+          occurrenceStart: "2026-03-27T12:00:00.000Z",
+        })
+      );
+      assert.equal(deleteFollowing.status, 400);
+      assert.equal(deleteFollowing.body.error.code, "UPSTREAM_ERROR");
+    });
+
     await t.test("series delete works on a fresh recurring series", async () => {
       const title = buildEventTitle(config, "series-delete");
       const recurring = await apiRequest(config, "POST", buildCollectionRoute(config), {
@@ -339,4 +482,11 @@ function findLiveEvent(events, title) {
   const match = events.find((event) => event.title === title);
   assert.ok(match, `expected live event ${title} in list response`);
   return match;
+}
+
+function occurrenceStarts(events, title) {
+  return events
+    .filter((event) => event.title === title)
+    .map((event) => event.occurrenceStart || event.start)
+    .sort();
 }
