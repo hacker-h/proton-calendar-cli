@@ -1,3 +1,11 @@
+# [1.8.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.7.0...v1.8.0) (2026-05-15)
+
+
+### Features
+
+* **api:** normalize friendly app reminders ([f4ad0af](https://github.com/hacker-h/proton-calendar-cli/commit/f4ad0af7ca6cd14b70af8561b4f4ac5e5eb3fe09))
+* **cli:** accept friendly reminder assignments ([23e3d10](https://github.com/hacker-h/proton-calendar-cli/commit/23e3d10e16e071a4a0d8c0fbc90fd1cdbe45dd9b))
+
 # [1.7.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.6.0...v1.7.0) (2026-05-15)
 
 
