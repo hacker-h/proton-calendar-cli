@@ -3,7 +3,26 @@ export function sanitizeUpstreamPayload(payload) {
   if (payload && typeof payload === "object" && typeof payload.Code === "number") {
     details.code = payload.Code;
   }
+  const upstreamError = readSafeUpstreamText(payload?.Error || payload?.error);
+  if (upstreamError) {
+    details.upstreamError = upstreamError;
+  }
+  const upstreamMessage = readSafeUpstreamText(payload?.Message || payload?.message);
+  if (upstreamMessage) {
+    details.upstreamMessage = upstreamMessage;
+  }
   return details;
+}
+
+function readSafeUpstreamText(value) {
+  if (typeof value !== "string") {
+    return null;
+  }
+  const trimmed = value.trim();
+  if (!trimmed || /AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|Bearer\s+[A-Za-z0-9._-]+|cookie|token|password/i.test(trimmed)) {
+    return null;
+  }
+  return trimmed.slice(0, 200);
 }
 
 export function backoffMs(attempt) {

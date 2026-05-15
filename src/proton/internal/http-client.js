@@ -21,6 +21,7 @@ export async function requestProtonJson({
 }) {
   const uid = options.uid || (await getUID());
   const url = new URL(pathname, baseUrl);
+  const origin = new URL(baseUrl).origin;
 
   const query = options.query || {};
   for (const [key, value] of Object.entries(query)) {
@@ -35,6 +36,7 @@ export async function requestProtonJson({
     "x-pm-appversion": appVersion,
     "x-pm-locale": locale,
     "x-pm-uid": uid,
+    ...(method === "GET" ? {} : { Origin: origin, Referer: `${origin}/` }),
     ...(options.extraHeaders || {}),
   };
 
@@ -112,7 +114,10 @@ export async function requestProtonJson({
           }
         }
 
-        throw new ApiError(401, "AUTH_EXPIRED", "Proton session is expired or unauthorized");
+        throw new ApiError(401, "AUTH_EXPIRED", "Proton session is expired or unauthorized", {
+          status: response.status,
+          ...sanitizeUpstreamPayload(payload),
+        });
       }
 
       if (response.status === 404) {

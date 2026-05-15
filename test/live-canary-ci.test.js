@@ -13,6 +13,7 @@ import {
   compareLiveDriftSnapshots,
   parseEnvFile,
   parseLiveQuarantine,
+  prepareLiveCanaryEnv,
 } from "../scripts/ci/run-live-canary.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -20,14 +21,19 @@ const execFileAsync = promisify(execFile);
 test("CI requires live Proton canary for trusted runs", async () => {
   const workflow = await readFile(path.resolve(".github/workflows/ci.yml"), "utf8");
 
-  assert.match(workflow, /name: Required live Proton canary/);
+  assert.match(workflow, /name: Live Proton canary \(trusted only\)/);
   assert.match(workflow, /github\.event_name == 'workflow_dispatch'/);
   assert.match(workflow, /github\.event_name == 'schedule'/);
   assert.match(workflow, /github\.event_name == 'push' && github\.ref == 'refs\/heads\/main'/);
   assert.match(workflow, /github\.event_name == 'pull_request' && github\.event\.pull_request\.head\.repo\.full_name == github\.repository/);
   assert.match(workflow, /name: Require live secrets/);
   assert.match(workflow, /Required live Proton canary secrets PROTON_USERNAME and PROTON_PASSWORD must be configured/);
-  assert.doesNotMatch(workflow, /Optional live Proton canary/);
+  assert.match(workflow, /PROTON_USERNAME2: \$\{\{ secrets\.PROTON_USERNAME2 \}\}/);
+  assert.match(workflow, /PROTON_PASSWORD2: \$\{\{ secrets\.PROTON_PASSWORD2 \}\}/);
+  assert.match(workflow, /Second-account live tests require PROTON_USERNAME2 and PROTON_PASSWORD2 secrets/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_SECOND_ACCOUNT/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_INVITES/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_SHARING/);
   assert.doesNotMatch(workflow, /steps\.live-secrets/);
 });
 
@@ -36,6 +42,20 @@ test("parseEnvFile reads quoted live canary environment", () => {
     API_BEARER_TOKEN: "token",
     PC_API_BASE_URL: "http://127.0.0.1:8787",
   });
+});
+
+test("prepareLiveCanaryEnv uses an available loopback port unless explicitly configured", async () => {
+  const dynamic = await prepareLiveCanaryEnv({ PATH: process.env.PATH || "" });
+  assert.match(dynamic.PC_API_BASE_URL, /^http:\/\/127\.0\.0\.1:\d+$/);
+  assert.match(dynamic.PORT, /^\d+$/);
+
+  const explicit = await prepareLiveCanaryEnv({ PC_API_BASE_URL: "http://127.0.0.1:9876" });
+  assert.equal(explicit.PC_API_BASE_URL, "http://127.0.0.1:9876");
+  assert.equal(explicit.PORT, "9876");
+
+  const remote = await prepareLiveCanaryEnv({ PC_API_BASE_URL: "https://example.invalid" });
+  assert.equal(remote.PC_API_BASE_URL, "https://example.invalid");
+  assert.equal(remote.PORT, undefined);
 });
 
 test("parseLiveQuarantine requires owner reason and future expiry", () => {
@@ -267,6 +287,33 @@ test("live drift array item comparison: empty actual skips item validation non-b
   assert.equal(differences.filter((difference) => difference.severity === "breaking").length, 0);
 });
 
+test("live drift comparison reports malformed baselines instead of crashing", () => {
+  const differences = compareLiveDriftSnapshots(
+    {
+      surfaces: [
+        {
+          id: "events.list",
+          endpoint: "/v1/events",
+          status: 200,
+          shape: { type: "object", keys: { data: null } },
+        },
+      ],
+    },
+    {
+      surfaces: [
+        {
+          id: "events.list",
+          endpoint: "/v1/events",
+          status: 200,
+          shape: buildDriftShape({ data: { events: [] } }),
+        },
+      ],
+    }
+  );
+
+  assert.equal(differences.some((difference) => difference.kind === "invalid_baseline"), true);
+});
+
 test("live drift array item comparison: non-empty actual compared against non-unknown baseline", () => {
   const baseline = {
     surfaces: [
@@ -325,7 +372,7 @@ test("write-live-env creates runnable API and live-test environment", async () =
   });
 
   const values = parseEnvFile(await readFile(envPath, "utf8"));
-  assert.equal(values.COOKIE_BUNDLE_PATH, "secrets/proton-cookies.json");
+  assert.equal(values.COOKIE_BUNDLE_PATH, cookieBundlePath);
   assert.equal(values.TARGET_CALENDAR_ID, "cal-secondary");
   assert.equal(values.DEFAULT_CALENDAR_ID, "cal-secondary");
   assert.equal(values.ALLOWED_CALENDAR_IDS, "cal-secondary,cal-default");
@@ -333,6 +380,38 @@ test("write-live-env creates runnable API and live-test environment", async () =
   assert.equal(values.API_BEARER_TOKEN, "token-123");
   assert.equal(values.PC_API_TOKEN, "token-123");
   assert.equal(values.PC_API_BASE_URL, "http://127.0.0.1:8787");
+});
+
+test("write-live-env ignores stale configured calendar ids not discovered by bootstrap", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "live-env-stale-calendar-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  const envPath = path.join(tmpDir, "ci-live.env");
+
+  await writeFile(
+    cookieBundlePath,
+    `${JSON.stringify({
+      authProbe: {
+        defaultCalendarId: "cal-primary",
+        calendarIds: ["cal-primary", "cal-secondary"],
+      },
+    }, null, 2)}\n`,
+    { mode: 0o600 }
+  );
+
+  await execFileAsync(process.execPath, ["scripts/ci/write-live-env.mjs"], {
+    env: {
+      ...process.env,
+      COOKIE_BUNDLE_PATH: cookieBundlePath,
+      CI_LIVE_ENV_PATH: envPath,
+      PROTON_TEST_CALENDAR_ID: "cal-stale",
+      API_BEARER_TOKEN: "token-123",
+    },
+  });
+
+  const values = parseEnvFile(await readFile(envPath, "utf8"));
+  assert.equal(values.PROTON_TEST_CALENDAR_ID, "cal-secondary");
+  assert.equal(values.TARGET_CALENDAR_ID, "cal-secondary");
+  assert.equal(values.ALLOWED_CALENDAR_IDS, "cal-secondary,cal-primary");
 });
 
 test("write-live-env generates a per-run token when none is configured", async () => {

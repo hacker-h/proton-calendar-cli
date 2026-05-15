@@ -2,9 +2,11 @@
 
 import { spawn } from "node:child_process";
 import { mkdir, readFile, writeFile } from "node:fs/promises";
+import { createServer } from "node:net";
 import { setTimeout as delay } from "node:timers/promises";
 import path from "node:path";
 import { assertSafeDiagnostics } from "./bootstrap-proton-session.mjs";
+import { loadDotEnv } from "../../src/env-file.js";
 
 const DEFAULT_ENV_PATH = "secrets/ci-live.env";
 const DEFAULT_TRIAGE_PATH = "reports/live-triage.json";
@@ -40,18 +42,23 @@ if (import.meta.url === `file://${process.argv[1]}`) {
 }
 
 export async function main(env = process.env) {
-  const envPath = path.resolve(env.CI_LIVE_ENV_PATH || DEFAULT_ENV_PATH);
-  const quarantine = await readLiveQuarantine(env.CI_LIVE_QUARANTINE_PATH);
+  if (env === process.env) {
+    loadDotEnv(env);
+  }
+  const runEnv = await prepareLiveCanaryEnv(env);
+
+  const envPath = path.resolve(runEnv.CI_LIVE_ENV_PATH || DEFAULT_ENV_PATH);
+  const quarantine = await readLiveQuarantine(runEnv.CI_LIVE_QUARANTINE_PATH);
   if (quarantine.active.length > 0 || quarantine.invalid.length > 0) {
     console.log(JSON.stringify({ data: { liveQuarantine: quarantine } }, null, 2));
   }
 
-  await runStage("browser-install", () => runCommand(pnpmCommand(), ["exec", "playwright", "install", "chromium", "--with-deps"], { env }));
-  await runStage("bootstrap", () => runCommand(process.execPath, ["scripts/ci/bootstrap-proton-session.mjs"], { env }));
-  await runStage("write-live-env", () => runCommand(process.execPath, ["scripts/ci/write-live-env.mjs"], { env }));
+  await runStage("browser-install", () => runCommand(pnpmCommand(), ["exec", "playwright", "install", "chromium", "--with-deps"], { env: runEnv }));
+  await runStage("bootstrap", () => runCommand(process.execPath, ["scripts/ci/bootstrap-proton-session.mjs"], { env: runEnv }));
+  await runStage("write-live-env", () => runCommand(process.execPath, ["scripts/ci/write-live-env.mjs"], { env: runEnv }));
 
   const liveEnv = {
-    ...env,
+    ...runEnv,
     ...parseEnvFile(await readFile(envPath, "utf8")),
   };
 
@@ -68,6 +75,28 @@ export async function main(env = process.env) {
   } finally {
     await stopServer(server);
   }
+}
+
+export async function prepareLiveCanaryEnv(env = process.env) {
+  const prepared = { ...env };
+  if (!String(prepared.PC_API_BASE_URL || "").trim() && String(prepared.API_BASE_URL || "").trim()) {
+    prepared.PC_API_BASE_URL = String(prepared.API_BASE_URL).trim();
+  }
+
+  if (!String(prepared.PC_API_BASE_URL || "").trim()) {
+    const port = await findAvailableLoopbackPort();
+    prepared.PORT = String(port);
+    prepared.PC_API_BASE_URL = `http://127.0.0.1:${port}`;
+    return prepared;
+  }
+
+  if (!String(prepared.PORT || "").trim()) {
+    const port = readLoopbackPort(prepared.PC_API_BASE_URL);
+    if (port) {
+      prepared.PORT = String(port);
+    }
+  }
+  return prepared;
 }
 
 export function classifyLiveCanaryFailure(error, options = {}) {
@@ -363,6 +392,10 @@ async function captureDriftSurface(apiBaseUrl, token, request) {
 }
 
 function compareShape(expected, actual, context) {
+  if (!expected || typeof expected.type !== "string") {
+    context.differences.push(buildDriftDifference(context.surface, context.endpoint, "invalid_baseline", "breaking", `${context.path} has an invalid baseline shape`));
+    return;
+  }
   if (!actual) {
     context.differences.push(buildDriftDifference(context.surface, context.endpoint, "missing_field", "breaking", `${context.path} is missing`));
     return;
@@ -473,6 +506,40 @@ function readPositiveNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function findAvailableLoopbackPort() {
+  return new Promise((resolve, reject) => {
+    const server = createServer();
+    server.once("error", reject);
+    server.listen(0, "127.0.0.1", () => {
+      const address = server.address();
+      const port = typeof address === "object" && address ? address.port : null;
+      server.close((error) => {
+        if (error) {
+          reject(error);
+          return;
+        }
+        if (!port) {
+          reject(new Error("Unable to allocate live canary port"));
+          return;
+        }
+        resolve(port);
+      });
+    });
+  });
+}
+
+function readLoopbackPort(value) {
+  try {
+    const url = new URL(String(value));
+    if (!["127.0.0.1", "localhost", "::1"].includes(url.hostname)) {
+      return null;
+    }
+    return url.port || null;
+  } catch {
+    return null;
+  }
+}
+
 function pnpmCommand() {
   return process.platform === "win32" ? "pnpm.cmd" : "pnpm";
 }
@@ -568,7 +635,7 @@ function normalizeQuarantineEntry(entry) {
 
 function isSafeQuarantineEntry(entry) {
   const serialized = JSON.stringify(entry);
-  return !/API_BEARER_TOKEN|PC_API_TOKEN|COOKIE_BUNDLE_PATH|ci-live\.env|Bearer\s+[A-Za-z0-9._-]+|AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|"cookie"\s*:/i.test(serialized);
+  return !/API_BEARER_TOKEN|PC_API_TOKEN|PROTON(?:MAIL)?_(?:USERNAME|PASSWORD)2?|COOKIE_BUNDLE_PATH|ci-live\.env|Bearer\s+[A-Za-z0-9._-]+|AUTH-[A-Za-z0-9_-]+|REFRESH-[A-Za-z0-9_-]+|"cookie"\s*:/i.test(serialized);
 }
 
 function assertSafeLiveTriage(triage) {

@@ -52,6 +52,7 @@ Environment:
   API_BEARER_TOKEN    Fallback token env var
   PC_CONFIG_PATH      Optional path to local CLI config JSON
   PC_SERVER_ENV_PATH  Optional path to generated server env file
+  .env                Optional local env file; shell env values take precedence
 
 Login options:
   --target-calendar <id>  Use specific calendar ID (default: first available)

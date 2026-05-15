@@ -1,9 +1,13 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { execFile } from "node:child_process";
 import { chmod, mkdtemp, readFile, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
+import { fileURLToPath } from "node:url";
 import { runPcCli } from "../src/cli.js";
+
+const cliPath = fileURLToPath(new URL("../src/cli.js", import.meta.url));
 
 test("login bootstraps cookies and writes local config/env files", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-login-test-"));
@@ -2033,6 +2037,34 @@ test("loads API token/base URL from local config file", async () => {
   assert.equal(requests[0].init.headers.Authorization, "Bearer file-token");
 });
 
+test("entrypoint loads local .env without overriding shell env", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-dotenv-test-"));
+  await writeFile(
+    path.join(tmpDir, ".env"),
+    [
+      "PC_API_BASE_URL=not-a-url",
+      "PC_API_TOKEN=dotenv-token",
+      "",
+    ].join("\n")
+  );
+  await chmod(path.join(tmpDir, ".env"), 0o600);
+
+  const result = await execFileResult(
+    process.execPath,
+    [cliPath, "ls", "--start", "2026-07-01T00:00:00Z", "--end", "2026-07-02T00:00:00Z"],
+    {
+      cwd: tmpDir,
+      env: minimalProcessEnv({
+        PC_API_BASE_URL: "http://127.0.0.1:1",
+      }),
+    }
+  );
+
+  assert.equal(result.code, 4);
+  assert.equal(JSON.parse(result.stderr).error.code, "API_UNREACHABLE");
+  assert.equal(result.stderr.includes("dotenv-token"), false);
+});
+
 test("unsafe local config permissions are rejected before API calls", async (t) => {
   if (process.platform === "win32") {
     t.skip("POSIX permission bits are not reliable on Windows");
@@ -2229,6 +2261,28 @@ function createWriter() {
       return buffer;
     },
   };
+}
+
+function execFileResult(file, args, options) {
+  return new Promise((resolve) => {
+    execFile(file, args, options, (error, stdout, stderr) => {
+      resolve({
+        code: error && typeof error.code === "number" ? error.code : 0,
+        stdout,
+        stderr,
+      });
+    });
+  });
+}
+
+function minimalProcessEnv(values = {}) {
+  const env = {};
+  for (const key of ["PATH", "HOME", "TMPDIR", "TEMP", "TMP", "SystemRoot", "WINDIR"]) {
+    if (process.env[key]) {
+      env[key] = process.env[key];
+    }
+  }
+  return { ...env, ...values };
 }
 
 function jsonResponse(status, payload, headers = []) {

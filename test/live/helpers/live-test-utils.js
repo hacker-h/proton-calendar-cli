@@ -6,14 +6,54 @@ export function readLiveConfig(env = process.env) {
   const apiToken = String(env.PC_API_TOKEN || env.API_BEARER_TOKEN || "").trim();
   const calendarId = String(env.PROTON_TEST_CALENDAR_ID || env.TARGET_CALENDAR_ID || env.DEFAULT_CALENDAR_ID || "").trim() || null;
   const enabled = Boolean(apiBaseUrl && apiToken);
+  const capabilities = readLiveCapabilities(env);
 
   return {
     enabled,
     apiBaseUrl,
     apiToken,
     calendarId,
+    capabilities,
     titlePrefix: env.PROTON_TEST_TITLE_PREFIX || `ci-e2e-${randomUUID().slice(0, 8)}`,
   };
+}
+
+export function readLiveCapabilities(env = process.env) {
+  const plan = normalizeLivePlan(env.PROTON_LIVE_PLAN);
+  const hasSecondAccount = Boolean(String(env.PROTON_USERNAME2 || "").trim() && String(env.PROTON_PASSWORD2 || "").trim());
+  const secondAccountRequested = readBooleanFlag(env.PROTON_LIVE_ENABLE_SECOND_ACCOUNT);
+  const secondAccount = secondAccountRequested && hasSecondAccount;
+  const invitesRequested = readBooleanFlag(env.PROTON_LIVE_ENABLE_INVITES);
+
+  return {
+    plan,
+    calendarCrud: readBooleanFlag(env.PROTON_LIVE_ENABLE_CALENDAR_CRUD),
+    sharing: readBooleanFlag(env.PROTON_LIVE_ENABLE_SHARING),
+    invites: invitesRequested && secondAccount,
+    invitesRequested,
+    availability: readBooleanFlag(env.PROTON_LIVE_ENABLE_AVAILABILITY),
+    appointmentScheduling: readBooleanFlag(env.PROTON_LIVE_ENABLE_APPOINTMENT_SCHEDULING),
+    subscribedCalendars: readBooleanFlag(env.PROTON_LIVE_ENABLE_SUBSCRIBED_CALENDARS),
+    holidayCalendars: readBooleanFlag(env.PROTON_LIVE_ENABLE_HOLIDAY_CALENDARS),
+    secondAccount,
+    secondAccountRequested,
+    hasSecondAccount,
+    attendeeEmail: String(env.PROTON_LIVE_ATTENDEE_EMAIL || env.PROTON_USERNAME2 || "").trim() || null,
+  };
+}
+
+export function skipUnlessCapability(config, capability, options = {}) {
+  const capabilities = config?.capabilities || readLiveCapabilities();
+  if (capabilities[capability] === true) {
+    return false;
+  }
+  if (capability === "secondAccount" && capabilities.secondAccountRequested && !capabilities.hasSecondAccount) {
+    return "second-account live tests require PROTON_USERNAME2 and PROTON_PASSWORD2";
+  }
+  if (capability === "invites" && capabilities.invitesRequested && !capabilities.secondAccount) {
+    return "invite live tests require PROTON_LIVE_ENABLE_SECOND_ACCOUNT=1 with PROTON_USERNAME2 and PROTON_PASSWORD2";
+  }
+  return options.reason || `${capability} live tests are disabled by capability gate`;
 }
 
 export function buildEventTitle(config, suffix) {
@@ -106,4 +146,13 @@ function buildQuery(input = {}) {
   }
   const query = params.toString();
   return query ? `?${query}` : "";
+}
+
+function readBooleanFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
+function normalizeLivePlan(value) {
+  const plan = String(value || "free").trim().toLowerCase();
+  return ["free", "paid", "org"].includes(plan) ? plan : "free";
 }

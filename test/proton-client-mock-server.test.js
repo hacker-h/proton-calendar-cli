@@ -1,5 +1,6 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { DEFAULT_PROTON_APP_VERSION } from "../src/constants.js";
 import { ProtonCalendarClient } from "../src/proton/proton-client.js";
 import { startMockProtonServer } from "./helpers/mock-proton-server.js";
 
@@ -26,7 +27,7 @@ test("authStatus can authenticate through the mock Proton HTTP server", async ()
     const userRequests = proton.requests().filter((request) => request.pathname === "/api/core/v4/users");
     assert.equal(userRequests.length, 2);
     assert.equal(userRequests[0].headers["x-pm-uid"], "uid-123");
-    assert.equal(userRequests[0].headers["x-pm-appversion"], "web-calendar@5.0.101.3");
+    assert.equal(userRequests[0].headers["x-pm-appversion"], DEFAULT_PROTON_APP_VERSION);
     assert.equal(userRequests[0].headers.cookie, "pm-session=valid-session");
   } finally {
     await proton.close();

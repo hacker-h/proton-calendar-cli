@@ -1,8 +1,12 @@
 node_modules/
 secrets/
+.env
+.env.*
+!.env.example
 .tmp/
 .sisyphus/
 .claude/
 .playwright/
 .pnpm-store/
 junit.xml
+reports/

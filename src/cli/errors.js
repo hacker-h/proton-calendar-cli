@@ -57,6 +57,15 @@ export function toCliErrorPayload(error) {
       },
     };
   }
+  if (error?.code === "SECRET_FILE_UNSAFE_PERMISSIONS") {
+    return {
+      error: {
+        code: error.code,
+        message: error.message,
+        details: sanitizeErrorDetails(error.details),
+      },
+    };
+  }
   return {
     error: {
       code: "INTERNAL_ERROR",
