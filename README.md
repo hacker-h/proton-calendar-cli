@@ -8,6 +8,21 @@ This is unofficial. Proton does not provide a stable public Calendar API for thi
 
 ## Quickstart
 
+Install the latest standalone `pc` CLI on Linux or macOS:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hacker-h/proton-calendar-cli/main/scripts/install.sh | sh
+pc --help
+```
+
+The installer downloads the matching GitHub release binary, verifies its sibling
+`.sha256` file, smoke-checks `pc --help`, and installs to
+`${XDG_BIN_HOME:-$HOME/.local/bin}` unless `PC_INSTALL_DIR` or `--dir` is set.
+If `pc` is not found after installation, add the printed directory to your
+`PATH`.
+
+For a source checkout with the local API server:
+
 ```bash
 pnpm approve-builds
 pnpm install
@@ -270,6 +285,43 @@ sha256sum -c pc-linux-x64.sha256
 chmod +x pc-linux-x64
 ./pc-linux-x64 --help
 ```
+
+On Linux and macOS, the one-line installer automates those steps:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hacker-h/proton-calendar-cli/main/scripts/install.sh | sh
+```
+
+Pin a release tag or choose a user-writable install directory:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/hacker-h/proton-calendar-cli/main/scripts/install.sh | sh -s -- --version v1.10.0
+curl -fsSL https://raw.githubusercontent.com/hacker-h/proton-calendar-cli/main/scripts/install.sh | sh -s -- --dir "$HOME/bin"
+PC_INSTALL_DIR="$HOME/bin" sh scripts/install.sh --version v1.10.0
+```
+
+The default install directory is `${XDG_BIN_HOME:-$HOME/.local/bin}`. The
+installer refuses unsupported OS/architecture combinations, never uses `sudo`,
+and fails if the target directory is not writable. Windows users should download
+`pc-windows-x64.exe` and its checksum manually from GitHub Releases.
+
+Uninstall a standalone installer-managed binary by deleting the installed file:
+
+```bash
+rm -f "${PC_INSTALL_DIR:-$HOME/.local/bin}/pc"
+```
+
+Security note: `curl | sh` executes remote code. To inspect before running:
+
+```bash
+curl -fsSLO https://raw.githubusercontent.com/hacker-h/proton-calendar-cli/main/scripts/install.sh
+less install.sh
+sh install.sh --version v1.10.0
+```
+
+The installer verifies the downloaded release asset against the release
+`.sha256` file. That detects corrupted or partial downloads; it does not protect
+against a compromised GitHub release or repository.
 
 Standalone release binaries can update themselves from GitHub Releases:
 
