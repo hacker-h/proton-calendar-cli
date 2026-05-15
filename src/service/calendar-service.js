@@ -1,5 +1,6 @@
 import { Temporal } from "@js-temporal/polyfill";
 import { ApiError, isApiError } from "../errors.js";
+import { normalizeFriendlyReminderFields } from "../reminders.js";
 
 const ALLOWED_FIELDS = new Set([
   "title",
@@ -313,6 +314,7 @@ function validateCreatePayload(payload) {
   if (!payload || typeof payload !== "object") {
     throw new ApiError(400, "INVALID_PAYLOAD", "Request body must be a JSON object");
   }
+  payload = normalizeFriendlyReminderFields(payload, invalidReminderError);
 
   const title = requireString(payload.title, "title", 1, 200);
   const timezone = requireString(payload.timezone, "timezone", 1, 100);
@@ -347,6 +349,7 @@ function validatePatchPayload(payload, scope) {
   if (!payload || typeof payload !== "object") {
     throw new ApiError(400, "INVALID_PAYLOAD", "Request body must be a JSON object");
   }
+  payload = normalizeFriendlyReminderFields(payload, invalidReminderError);
 
   const patch = {};
   const patchTimezone = payload.timezone === undefined ? undefined : requireString(payload.timezone, "timezone", 1, 100);
@@ -415,6 +418,10 @@ function validatePatchPayload(payload, scope) {
   }
 
   return patch;
+}
+
+function invalidReminderError(message) {
+  return new ApiError(400, "INVALID_REMINDERS", message);
 }
 
 function validateRecurrence(raw) {

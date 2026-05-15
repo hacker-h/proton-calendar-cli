@@ -154,6 +154,15 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(listed.status, 200);
       assert.deepEqual(findLiveEvent(listed.body.data.events, renamed.body.data.title).notifications, notifications);
 
+      const friendly = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
+        reminders: "5m,1h",
+      });
+      assert.equal(friendly.status, 200);
+      assert.deepEqual(friendly.body.data.notifications, [
+        { Type: 1, Trigger: "-PT5M" },
+        { Type: 1, Trigger: "-PT1H" },
+      ]);
+
       const cleared = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
         notifications: null,
       });

@@ -301,6 +301,18 @@ async function testNotificationCrud(env) {
   assert.equal(restored.exitCode, 0);
   assert.deepEqual(restored.payload.data.notifications, notifications);
 
+  const friendly = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "reminders=5m,1h",
+  ], env);
+  assert.equal(friendly.exitCode, 0);
+  assert.deepEqual(friendly.payload.data.notifications, [
+    { Type: 1, Trigger: "-PT5M" },
+    { Type: 1, Trigger: "-PT1H" },
+  ]);
+
   const cleared = await runJsonCli([
     "edit",
     eventId,

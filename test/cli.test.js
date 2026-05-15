@@ -1231,6 +1231,116 @@ test("new sends normal string assignment values unchanged", async () => {
   assert.equal(body.title, "Design review");
 });
 
+test("new compiles friendly reminder assignment to notifications", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(
+    ["new", "title=Reminder", "start=2026-03-10T10:00:00Z", "end=2026-03-10T10:30:00Z", "timezone=UTC", "reminder=10m"],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async (url, init) => {
+        requests.push({ url: new URL(String(url)), init });
+        return jsonResponse(200, { data: { id: "evt-1" } });
+      },
+      stdout: createWriter(),
+      stderr: createWriter(),
+    }
+  );
+
+  assert.equal(exitCode, 0);
+  const body = JSON.parse(String(requests[0].init.body));
+  assert.deepEqual(body.notifications, [{ Type: 1, Trigger: "-PT10M" }]);
+  assert.equal(Object.hasOwn(body, "reminder"), false);
+});
+
+test("edit compiles multiple friendly reminders to notifications", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(["edit", "evt-1", "reminders=10m,1h"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, { data: { id: "evt-1" } });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  const body = JSON.parse(String(requests[0].init.body));
+  assert.deepEqual(body, {
+    notifications: [
+      { Type: 1, Trigger: "-PT10M" },
+      { Type: 1, Trigger: "-PT1H" },
+    ],
+  });
+});
+
+test("friendly reminders reject invalid syntax before API calls", async () => {
+  for (const assignment of ["reminder=0m", "reminders=email:1h", "reminders=sms:10m", "reminders=10m,"]) {
+    const stderr = createWriter();
+    let apiCalled = false;
+
+    const exitCode = await runPcCli(
+      ["new", "title=Bad", "start=2026-03-10T10:00:00Z", "end=2026-03-10T10:30:00Z", assignment],
+      {
+        env: {
+          PC_API_BASE_URL: "http://127.0.0.1:8787",
+          PC_API_TOKEN: "token",
+        },
+        fetchImpl: async () => {
+          apiCalled = true;
+          throw new Error("should not call API");
+        },
+        stdout: createWriter(),
+        stderr,
+      }
+    );
+
+    assert.equal(exitCode, 2);
+    assert.equal(apiCalled, false);
+    assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_REMINDERS");
+  }
+});
+
+test("friendly reminders cannot be mixed with raw notifications", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(
+    [
+      "new",
+      "title=Bad",
+      "start=2026-03-10T10:00:00Z",
+      "end=2026-03-10T10:30:00Z",
+      "reminder=10m",
+      'notifications=[{"Type":1,"Trigger":"-PT5M"}]',
+    ],
+    {
+      env: {
+        PC_API_BASE_URL: "http://127.0.0.1:8787",
+        PC_API_TOKEN: "token",
+      },
+      fetchImpl: async () => {
+        apiCalled = true;
+        throw new Error("should not call API");
+      },
+      stdout: createWriter(),
+      stderr,
+    }
+  );
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_REMINDERS");
+});
+
 test("new dry-run previews request without config or API call", async () => {
   const stdout = createWriter();
   const stderr = createWriter();

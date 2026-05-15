@@ -40,9 +40,11 @@ Examples:
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
   pc new --dry-run title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
   pc new title="Reminder" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC notifications='[{"Type":1,"Trigger":"-PT10M"}]'
+  pc new title="Reminder" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC reminder=10m
   pc edit evt-1 title="Updated" --clear description
   pc edit evt-1 --dry-run title="Updated"
   pc edit evt-1 notifications=null
+  pc edit evt-1 reminders=10m,1h
   pc edit evt-1 --scope single --at 2026-03-12T09:00:00Z location="Room B"
   pc rm evt-1 --scope series
 
@@ -89,6 +91,8 @@ List options:
   --end <datetime>     Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (same as --to)
 
 Mutation fields:
+  reminder           Friendly single reminder, e.g. 10m, 1h, 2d
+  reminders          Comma-separated friendly app reminders, e.g. 10m,1h
   notifications      Null or an array of up to 10 Proton-compatible notification objects; omitted edit fields are preserved
 
 Mutation options:
