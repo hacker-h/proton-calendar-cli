@@ -97,6 +97,8 @@
  * @property {boolean | undefined} [allDay]
  * @property {boolean | undefined} [protected]
  * @property {RecurrencePayload | undefined} [recurrence]
+ * @property {string | undefined} [reminder]
+ * @property {string | undefined} [reminders]
  * @property {JsonValue[] | null | undefined} [notifications]
  */
 

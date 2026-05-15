@@ -362,6 +362,65 @@ test("create edit and list preserve event notifications", async () => {
   }
 });
 
+test("friendly reminders normalize through API create and patch", async () => {
+  const setup = await createFixture();
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Friendly reminder create",
+      start: "2026-03-10T12:00:00.000Z",
+      end: "2026-03-10T12:30:00.000Z",
+      timezone: "UTC",
+      reminder: "10m",
+    });
+
+    assert.equal(created.status, 201);
+    assert.deepEqual(created.body.data.notifications, [{ Type: 1, Trigger: "-PT10M" }]);
+
+    const patched = await apiRequest(setup, "PATCH", `/v1/events/${created.body.data.id}`, {
+      reminders: "10m,1h",
+    });
+    assert.equal(patched.status, 200);
+    assert.deepEqual(patched.body.data.notifications, [
+      { Type: 1, Trigger: "-PT10M" },
+      { Type: 1, Trigger: "-PT1H" },
+    ]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("friendly reminder validation returns stable API errors", async () => {
+  const setup = await createFixture();
+  try {
+    const invalidDuration = await apiRequest(setup, "POST", "/v1/events", {
+      title: "Bad reminder",
+      start: "2026-03-10T12:00:00.000Z",
+      end: "2026-03-10T12:30:00.000Z",
+      timezone: "UTC",
+      reminder: "0m",
+    });
+    assert.equal(invalidDuration.status, 400);
+    assert.equal(invalidDuration.body.error.code, "INVALID_REMINDERS");
+
+    for (const reminders of ["email:1h", "sms:10m"]) {
+      const unsupportedChannel = await apiRequest(setup, "PATCH", "/v1/events/evt-1", {
+        reminders,
+      });
+      assert.equal(unsupportedChannel.status, 400);
+      assert.equal(unsupportedChannel.body.error.code, "INVALID_REMINDERS");
+    }
+
+    const mixedRaw = await apiRequest(setup, "PATCH", "/v1/events/evt-1", {
+      reminder: "10m",
+      notifications: [{ Type: 1, Trigger: "-PT5M" }],
+    });
+    assert.equal(mixedRaw.status, 400);
+    assert.equal(mixedRaw.body.error.code, "INVALID_REMINDERS");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("supports recurrence and expands instances in list responses", async () => {
   const setup = await createFixture();
   try {
