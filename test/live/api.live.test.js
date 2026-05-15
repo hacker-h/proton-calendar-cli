@@ -104,6 +104,63 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(badWeeklyByDay.body.error.code, "INVALID_RECURRENCE");
     });
 
+    await t.test("notification validation rejects more than ten reminders", async () => {
+      const tooManyNotifications = Array.from({ length: 11 }, (_value, index) => ({
+        Type: 1,
+        Trigger: `-PT${index + 1}M`,
+      }));
+      const invalid = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title: buildEventTitle(config, "invalid-notifications-max"),
+        start: "2026-03-06T12:00:00.000Z",
+        end: "2026-03-06T12:30:00.000Z",
+        timezone: "UTC",
+        notifications: tooManyNotifications,
+      });
+      assert.equal(invalid.status, 400);
+      assert.equal(invalid.body.error.code, "INVALID_NOTIFICATIONS");
+    });
+
+    await t.test("notifications create preserve and clear through API mutations", async () => {
+      const title = buildEventTitle(config, "notifications-api");
+      const notifications = [{ Type: 1, Trigger: "-PT10M" }];
+      const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title,
+        description: "live api notifications",
+        location: "Reminder room",
+        start: "2026-03-07T09:00:00.000Z",
+        end: "2026-03-07T09:30:00.000Z",
+        timezone: "UTC",
+        notifications,
+      });
+      assert.equal(created.status, 201);
+      assert.deepEqual(created.body.data.notifications, notifications);
+
+      const eventId = created.body.data.id;
+      const renamed = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
+        title: buildEventTitle(config, "notifications-api-renamed"),
+      });
+      assert.equal(renamed.status, 200);
+      assert.deepEqual(renamed.body.data.notifications, notifications);
+
+      const listed = await apiRequest(
+        config,
+        "GET",
+        buildCollectionRoute(config, {
+          start: "2026-03-07T00:00:00.000Z",
+          end: "2026-03-08T00:00:00.000Z",
+          limit: 50,
+        })
+      );
+      assert.equal(listed.status, 200);
+      assert.deepEqual(findLiveEvent(listed.body.data.events, renamed.body.data.title).notifications, notifications);
+
+      const cleared = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
+        notifications: null,
+      });
+      assert.equal(cleared.status, 200);
+      assert.equal(cleared.body.data.notifications, null);
+    });
+
     await t.test("timed UTC event round trips protected, notifications, and clearable fields", async () => {
       const title = buildEventTitle(config, "timed-utc");
       const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
