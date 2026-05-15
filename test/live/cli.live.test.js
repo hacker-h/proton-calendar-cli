@@ -1,5 +1,8 @@
 import test from "node:test";
 import assert from "node:assert/strict";
+import { mkdtemp, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
 import { runPcCli } from "../../src/cli.js";
 import { buildEventTitle, cleanupEvents, readLiveConfig, waitForApi } from "./helpers/live-test-utils.js";
 
@@ -7,7 +10,7 @@ const config = readLiveConfig();
 const RANGE_START = "2026-03-01T00:00:00.000Z";
 const RANGE_END = "2026-04-01T00:00:00.000Z";
 
-test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOKEN are required" : false }, async () => {
+test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOKEN are required" : false }, async (t) => {
   await waitForApi(config);
   await cleanupEvents(config, RANGE_START, RANGE_END);
 
@@ -20,17 +23,21 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
   }
 
   try {
-    const doctor = await runJsonCli(["doctor", "auth", "--cookie-bundle", process.env.COOKIE_BUNDLE_PATH || "secrets/proton-cookies.json"]);
-    assert.equal(doctor.exitCode, 0);
-    assert.equal(["access_valid", "refresh_recovered"].includes(doctor.payload.data.status), true);
+    await t.test("doctor auth reports live session readiness", async () => {
+      const doctor = await runJsonCli(["doctor", "auth", "--cookie-bundle", process.env.COOKIE_BUNDLE_PATH || "secrets/proton-cookies.json"]);
+      assert.equal(doctor.exitCode, 0);
+      assert.equal(["access_valid", "refresh_recovered"].includes(doctor.payload.data.status), true);
+    });
 
-    await testTimedUtcCrud(env);
-    await testTimedBerlinCrud(env);
-    await testAllDayUtc(env);
-    await testRecurrenceCrud(env);
-    await testNotificationCrud(env);
-    await testListWindows(env);
-    await testListFiltersAndOutput(env);
+    await t.test("timed UTC event supports create list edit clear and delete", () => testTimedUtcCrud(env));
+    await t.test("timed Europe/Berlin event preserves timezone metadata", () => testTimedBerlinCrud(env));
+    await t.test("all-day UTC event preserves date-only boundaries", () => testAllDayUtc(env));
+    await t.test("recurring event supports scoped edit and delete arguments", () => testRecurrenceCrud(env));
+    await t.test("recurrence fields support interval exDates byDay weekStart byMonthDay and until", () => testRecurrenceFieldMatrix(env));
+    await t.test("notifications support raw friendly preserve and clear flows", () => testNotificationCrud(env));
+    await t.test("patch file merges with assignments clear and calendar routing", () => testPatchFileAndCalendarRouting(env));
+    await t.test("list shortcuts cover deterministic live windows", () => testListWindows(env));
+    await t.test("list filters cover text protection and output modes", () => testListFiltersAndOutput(env));
   } finally {
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
@@ -256,6 +263,102 @@ async function testRecurrenceCrud(env) {
   assert.equal(deleteFollowing.payload.error.code, "UPSTREAM_ERROR");
 }
 
+async function testRecurrenceFieldMatrix(env) {
+  const dailyTitle = buildEventTitle(config, "cli-recur-daily-interval-exdate");
+  const daily = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${dailyTitle}`,
+    "start=2026-03-10T09:00:00.000Z",
+    "end=2026-03-10T09:30:00.000Z",
+    "timezone=UTC",
+    "recurrence.freq=DAILY",
+    "recurrence.interval=2",
+    "recurrence.count=3",
+    "recurrence.exDates=[\"2026-03-12T09:00:00.000Z\"]",
+    "notifications=null",
+  ], env);
+  assert.equal(daily.exitCode, 0);
+  assert.equal(daily.payload.data.recurrence.interval, 2);
+  assert.deepEqual(daily.payload.data.recurrence.exDates, ["2026-03-12T09:00:00.000Z"]);
+
+  const weeklyTitle = buildEventTitle(config, "cli-recur-weekly-byday-weekstart");
+  const weekly = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${weeklyTitle}`,
+    "start=2026-03-23T08:00:00.000Z",
+    "end=2026-03-23T08:30:00.000Z",
+    "timezone=Europe/Berlin",
+    "recurrence.freq=WEEKLY",
+    "recurrence.count=3",
+    "recurrence.byDay=[\"MO\"]",
+    "recurrence.weekStart=MO",
+    "notifications=null",
+  ], env);
+  assert.equal(weekly.exitCode, 0);
+  assert.deepEqual(weekly.payload.data.recurrence.byDay, ["MO"]);
+  assert.equal(weekly.payload.data.recurrence.weekStart, "MO");
+
+  const monthlyTitle = buildEventTitle(config, "cli-recur-monthly-bymonthday");
+  const monthly = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${monthlyTitle}`,
+    "start=2026-03-31T10:00:00.000Z",
+    "end=2026-03-31T10:30:00.000Z",
+    "timezone=UTC",
+    "recurrence.freq=MONTHLY",
+    "recurrence.count=2",
+    "recurrence.byMonthDay=[31]",
+    "notifications=null",
+  ], env);
+  assert.equal(monthly.exitCode, 0);
+  assert.deepEqual(monthly.payload.data.recurrence.byMonthDay, [31]);
+
+  const yearlyTitle = buildEventTitle(config, "cli-recur-yearly-until");
+  const yearly = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${yearlyTitle}`,
+    "start=2026-03-15T12:00:00.000Z",
+    "end=2026-03-15T12:30:00.000Z",
+    "timezone=UTC",
+    "recurrence.freq=YEARLY",
+    "recurrence.until=2027-03-16T00:00:00.000Z",
+    "notifications=null",
+  ], env);
+  assert.equal(yearly.exitCode, 0);
+  assert.equal(yearly.payload.data.recurrence.until, "2027-03-16T00:00:00.000Z");
+
+  const listed = await runJsonCli([
+    "ls",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--from",
+    "2026-03-01",
+    "--to",
+    "2026-04-30",
+    "--title",
+    config.titlePrefix,
+  ], env);
+  assert.equal(listed.exitCode, 0);
+  assert.deepEqual(occurrenceStarts(listed.payload.data.events, dailyTitle), [
+    "2026-03-10T09:00:00.000Z",
+    "2026-03-14T09:00:00.000Z",
+    "2026-03-16T09:00:00.000Z",
+  ]);
+  assert.deepEqual(occurrenceStarts(listed.payload.data.events, weeklyTitle), [
+    "2026-03-23T08:00:00.000Z",
+    "2026-03-30T07:00:00.000Z",
+    "2026-04-06T07:00:00.000Z",
+  ]);
+  assert.deepEqual(occurrenceStarts(listed.payload.data.events, monthlyTitle), [
+    "2026-03-31T10:00:00.000Z",
+    "2026-04-30T10:00:00.000Z",
+  ]);
+  assert.deepEqual(occurrenceStarts(listed.payload.data.events, yearlyTitle), ["2026-03-15T12:00:00.000Z"]);
+}
+
 async function testNotificationCrud(env) {
   const title = buildEventTitle(config, "cli-notifications");
   const notifications = [{ Type: 1, Trigger: "-PT10M" }];
@@ -303,6 +406,15 @@ async function testNotificationCrud(env) {
   assert.equal(restored.exitCode, 0);
   assert.deepEqual(restored.payload.data.notifications, notifications);
 
+  const singularFriendly = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "reminder=10m",
+  ], env);
+  assert.equal(singularFriendly.exitCode, 0);
+  assert.deepEqual(singularFriendly.payload.data.notifications, [{ Type: 1, Trigger: "-PT10M" }]);
+
   const friendly = await runJsonCli([
     "edit",
     eventId,
@@ -324,6 +436,63 @@ async function testNotificationCrud(env) {
   ], env);
   assert.equal(cleared.exitCode, 0);
   assert.equal(cleared.payload.data.notifications, null);
+}
+
+async function testPatchFileAndCalendarRouting(env) {
+  const title = buildEventTitle(config, "cli-patch-file");
+  const created = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${title}`,
+    "description=patch file original",
+    "location=Patch Room A",
+    "start=2026-03-22T10:00:00.000Z",
+    "end=2026-03-22T10:30:00.000Z",
+    "timezone=UTC",
+    "protected=false",
+    "notifications=null",
+  ], env);
+  assert.equal(created.exitCode, 0);
+
+  const patchDir = await mkdtemp(path.join(os.tmpdir(), "pc-live-patch-"));
+  const patchPath = path.join(patchDir, "patch.json");
+  await writeFile(patchPath, `${JSON.stringify({
+    title: buildEventTitle(config, "cli-patch-file-from-json"),
+    description: "patched from json file",
+    location: "Patch Room B",
+  }, null, 2)}\n`);
+
+  const updatedTitle = buildEventTitle(config, "cli-patch-file-override");
+  const patched = await runJsonCli([
+    "edit",
+    created.payload.data.id,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--patch",
+    `@${patchPath}`,
+    `title=${updatedTitle}`,
+    "loc=Patch Room C",
+    "--clear",
+    "description",
+  ], env);
+  assert.equal(patched.exitCode, 0);
+  assert.equal(patched.payload.data.title, updatedTitle);
+  assert.equal(patched.payload.data.description, "");
+  assert.equal(patched.payload.data.location, "Patch Room C");
+
+  const listed = await runJsonCli([
+    "ls",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--from",
+    "2026-03-22",
+    "--to",
+    "2026-03-22",
+    "--title",
+    updatedTitle,
+  ], env);
+  assert.equal(listed.exitCode, 0);
+  const match = findCliEvent(listed.payload.data.events, updatedTitle);
+  assert.equal(match.location, "Patch Room C");
+  assert.equal(match.description, "");
 }
 
 async function testListWindows(env) {
