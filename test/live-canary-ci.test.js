@@ -382,6 +382,38 @@ test("write-live-env creates runnable API and live-test environment", async () =
   assert.equal(values.PC_API_BASE_URL, "http://127.0.0.1:8787");
 });
 
+test("write-live-env ignores stale configured calendar ids not discovered by bootstrap", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "live-env-stale-calendar-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  const envPath = path.join(tmpDir, "ci-live.env");
+
+  await writeFile(
+    cookieBundlePath,
+    `${JSON.stringify({
+      authProbe: {
+        defaultCalendarId: "cal-primary",
+        calendarIds: ["cal-primary", "cal-secondary"],
+      },
+    }, null, 2)}\n`,
+    { mode: 0o600 }
+  );
+
+  await execFileAsync(process.execPath, ["scripts/ci/write-live-env.mjs"], {
+    env: {
+      ...process.env,
+      COOKIE_BUNDLE_PATH: cookieBundlePath,
+      CI_LIVE_ENV_PATH: envPath,
+      PROTON_TEST_CALENDAR_ID: "cal-stale",
+      API_BEARER_TOKEN: "token-123",
+    },
+  });
+
+  const values = parseEnvFile(await readFile(envPath, "utf8"));
+  assert.equal(values.PROTON_TEST_CALENDAR_ID, "cal-secondary");
+  assert.equal(values.TARGET_CALENDAR_ID, "cal-secondary");
+  assert.equal(values.ALLOWED_CALENDAR_IDS, "cal-secondary,cal-primary");
+});
+
 test("write-live-env generates a per-run token when none is configured", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "live-env-token-test-"));
   const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");

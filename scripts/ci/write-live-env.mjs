@@ -16,9 +16,12 @@ const discoveredCalendarIds = Array.isArray(bundle?.authProbe?.calendarIds)
 const discoveredDefaultCalendarId = String(bundle?.authProbe?.defaultCalendarId || "").trim();
 const discoveredSecondaryCalendarId =
   discoveredCalendarIds.find((value) => value !== discoveredDefaultCalendarId) || discoveredDefaultCalendarId;
-const configuredCalendarId = String(
-  process.env.PROTON_TEST_CALENDAR_ID || process.env.TARGET_CALENDAR_ID || discoveredSecondaryCalendarId
-).trim();
+const requestedCalendarId = String(process.env.PROTON_TEST_CALENDAR_ID || process.env.TARGET_CALENDAR_ID || "").trim();
+const configuredCalendarId = resolveConfiguredCalendarId({
+  requestedCalendarId,
+  discoveredCalendarIds,
+  fallbackCalendarId: discoveredSecondaryCalendarId,
+});
 const allowedCalendarIds = [...new Set([configuredCalendarId, ...discoveredCalendarIds].filter(Boolean))];
 
 if (!configuredCalendarId) {
@@ -59,6 +62,16 @@ console.log(JSON.stringify({
 function formatCookieBundleEnvPath(filePath) {
   const relative = path.relative(process.cwd(), filePath);
   return relative && !relative.startsWith("..") && !path.isAbsolute(relative) ? relative : filePath;
+}
+
+function resolveConfiguredCalendarId({ requestedCalendarId, discoveredCalendarIds, fallbackCalendarId }) {
+  if (!requestedCalendarId) {
+    return fallbackCalendarId;
+  }
+  if (discoveredCalendarIds.length === 0 || discoveredCalendarIds.includes(requestedCalendarId)) {
+    return requestedCalendarId;
+  }
+  return fallbackCalendarId;
 }
 
 function quote(value) {
