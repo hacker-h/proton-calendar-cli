@@ -9,3 +9,4 @@ secrets/
 .playwright/
 .pnpm-store/
 junit.xml
+reports/
