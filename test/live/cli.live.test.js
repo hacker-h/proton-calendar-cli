@@ -36,8 +36,11 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await t.test("recurrence fields support interval exDates byDay weekStart byMonthDay and until", () => testRecurrenceFieldMatrix(env));
     await t.test("notifications support raw friendly preserve and clear flows", () => testNotificationCrud(env));
     await t.test("patch file merges with assignments clear and calendar routing", () => testPatchFileAndCalendarRouting(env));
-    await t.test("list shortcuts cover deterministic live windows", () => testListWindows(env));
-    await t.test("list filters cover text protection and output modes", () => testListFiltersAndOutput(env));
+    let listFixturePrefix;
+    await t.test("list shortcuts cover deterministic live windows", async () => {
+      listFixturePrefix = await testListWindows(env);
+    });
+    await t.test("list filters cover text protection and output modes", () => testListFiltersAndOutput(env, listFixturePrefix));
   } finally {
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
@@ -518,11 +521,11 @@ async function testListWindows(env) {
     `${prefix}-month`,
   ]);
   await assertListWindow(env, ["ls", "--from", "2026-03-12", "--to", "2026-03-12"], prefix, [`${prefix}-tomorrow`]);
+  return prefix;
 }
 
-async function testListFiltersAndOutput(env) {
-  const prefix = buildEventTitle(config, "cli-list-filter");
-  await createCliListFixtures(env, prefix);
+async function testListFiltersAndOutput(env, prefix) {
+  assert.ok(prefix, "list window fixtures must be created before filter assertions");
 
   await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--title", `${prefix}-today`], prefix, [`${prefix}-today`]);
   await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--description", "beta workshop"], prefix, [`${prefix}-tomorrow`]);
