@@ -82,6 +82,120 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(invalid.body.error.code, "INVALID_TIME_RANGE");
     });
 
+    await t.test("timed UTC event round trips protected, notifications, and clearable fields", async () => {
+      const title = buildEventTitle(config, "timed-utc");
+      const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title,
+        description: "live api timed utc description",
+        location: "UTC room",
+        start: "2026-03-18T08:00:00.000Z",
+        end: "2026-03-18T08:45:00.000Z",
+        timezone: "UTC",
+        protected: false,
+        notifications: null,
+      });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.data.title, title);
+      assert.equal(created.body.data.description, "live api timed utc description");
+      assert.equal(created.body.data.location, "UTC room");
+      assert.equal(created.body.data.timezone, "UTC");
+      assert.equal(created.body.data.allDay, false);
+      assert.equal(created.body.data.protected, false);
+      assert.equal(created.body.data.notifications, null);
+
+      const eventId = created.body.data.id;
+      const fetched = await apiRequest(config, "GET", buildEventRoute(config, eventId));
+      assert.equal(fetched.status, 200);
+      assert.equal(fetched.body.data.title, title);
+      assert.equal(fetched.body.data.protected, false);
+
+      const patched = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
+        description: "patched live api description",
+        location: "Patched UTC room",
+        notifications: null,
+      });
+      assert.equal(patched.status, 200);
+      assert.equal(patched.body.data.description, "patched live api description");
+      assert.equal(patched.body.data.location, "Patched UTC room");
+      assert.equal(patched.body.data.protected, false);
+      assert.equal(patched.body.data.notifications, null);
+
+      const cleared = await apiRequest(config, "PATCH", buildEventRoute(config, eventId), {
+        description: "",
+        location: "",
+      });
+      assert.equal(cleared.status, 200);
+      assert.equal(cleared.body.data.description, "");
+      assert.equal(cleared.body.data.location, "");
+    });
+
+    await t.test("timed Europe/Berlin event keeps timezone metadata", async () => {
+      const title = buildEventTitle(config, "timed-berlin");
+      const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title,
+        description: "live api berlin timezone",
+        location: "Berlin room",
+        start: "2026-03-19T08:00:00.000Z",
+        end: "2026-03-19T08:30:00.000Z",
+        timezone: "Europe/Berlin",
+        notifications: null,
+      });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.data.title, title);
+      assert.equal(created.body.data.timezone, "Europe/Berlin");
+      assert.equal(created.body.data.start, "2026-03-19T08:00:00.000Z");
+      assert.equal(created.body.data.end, "2026-03-19T08:30:00.000Z");
+      assert.equal(created.body.data.protected, true);
+
+      const listed = await apiRequest(
+        config,
+        "GET",
+        buildCollectionRoute(config, {
+          start: "2026-03-19T00:00:00.000Z",
+          end: "2026-03-20T00:00:00.000Z",
+          limit: 50,
+        })
+      );
+      assert.equal(listed.status, 200);
+      const match = findLiveEvent(listed.body.data.events, title);
+      assert.equal(match.timezone, "Europe/Berlin");
+      assert.equal(match.allDay, false);
+    });
+
+    await t.test("native all-day date-only event lists with UTC midnight boundaries", async () => {
+      const title = buildEventTitle(config, "all-day-utc");
+      const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
+        title,
+        description: "live api all-day",
+        location: "All-day room",
+        start: "2026-03-23",
+        end: "2026-03-24",
+        timezone: "UTC",
+        allDay: true,
+        notifications: null,
+      });
+      assert.equal(created.status, 201);
+      assert.equal(created.body.data.allDay, true);
+      assert.equal(created.body.data.start, "2026-03-23T00:00:00.000Z");
+      assert.equal(created.body.data.end, "2026-03-24T00:00:00.000Z");
+
+      const listed = await apiRequest(
+        config,
+        "GET",
+        buildCollectionRoute(config, {
+          start: "2026-03-22T00:00:00.000Z",
+          end: "2026-03-25T00:00:00.000Z",
+          limit: 50,
+        })
+      );
+      assert.equal(listed.status, 200);
+      const match = findLiveEvent(listed.body.data.events, title);
+      assert.equal(match.allDay, true);
+      assert.equal(match.timezone, "UTC");
+      assert.equal(match.start, "2026-03-23T00:00:00.000Z");
+      assert.equal(match.end, "2026-03-24T00:00:00.000Z");
+    });
+
     await t.test("single event supports create get patch delete on both route styles", async () => {
       const title = buildEventTitle(config, "crud");
       const created = await apiRequest(config, "POST", buildCollectionRoute(config, undefined, { useCalendarRoute: false }), {
@@ -220,3 +334,9 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
 });
+
+function findLiveEvent(events, title) {
+  const match = events.find((event) => event.title === title);
+  assert.ok(match, `expected live event ${title} in list response`);
+  return match;
+}
