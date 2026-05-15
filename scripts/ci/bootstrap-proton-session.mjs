@@ -5,6 +5,7 @@ import { fileURLToPath } from "node:url";
 import { chromium } from "playwright";
 import { withFileLock, writeSecretFileAtomic } from "../../src/atomic-secret-file.js";
 import { DEFAULT_PROTON_APP_VERSION } from "../../src/constants.js";
+import { loadDotEnv } from "../../src/env-file.js";
 
 const DEFAULT_OUTPUT_FILE = "secrets/proton-cookies.json";
 const DEFAULT_LOGIN_URL = "https://account.proton.me/login";
@@ -41,6 +42,7 @@ async function main() {
   let page;
 
   try {
+    loadDotEnv(process.env);
     options = parseArgs(process.argv.slice(2), process.env);
     browser = await chromium.launch({
       headless: true,
@@ -384,6 +386,18 @@ async function waitForStoragePopulation(page, timeoutMs) {
     }
     await page.waitForTimeout(500);
   }
+  const payload = {
+    warning: {
+      code: "LOCAL_STORAGE_TIMEOUT",
+      message: "Proton localStorage did not populate before timeout",
+      details: {
+        timeoutMs,
+        url: safePageUrlSummary(page),
+      },
+    },
+  };
+  assertSafeDiagnostics(payload);
+  console.warn(JSON.stringify(payload, null, 2));
 }
 
 async function verifyCalendarApiSession(page, uidCandidates) {
