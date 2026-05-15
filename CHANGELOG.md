@@ -1,3 +1,10 @@
+# [1.10.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.9.0...v1.10.0) (2026-05-15)
+
+
+### Features
+
+* **cli:** add standalone update command ([8e9625d](https://github.com/hacker-h/proton-calendar-cli/commit/8e9625d736520a9811a398b1878b331dd791213c))
+
 # [1.9.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.8.0...v1.9.0) (2026-05-15)
 
 
