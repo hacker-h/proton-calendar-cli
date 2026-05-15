@@ -1,8 +1,7 @@
-import { spawn } from "node:child_process";
 import { mkdir, open, readFile, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { main as runCookieBootstrap } from "../../scripts/bootstrap-proton-cookies.mjs";
 import { setTimeout as delay } from "node:timers/promises";
-import { fileURLToPath } from "node:url";
 
 const DEFAULT_TIMEOUT_MS = 120000;
 const DEFAULT_COOLDOWN_MS = 300000;
@@ -19,10 +18,7 @@ export class ProtonAuthManager {
     this.chromePath = options.chromePath || "";
     this.profileDir = options.profileDir || "";
     this.loginUrl = options.loginUrl || "https://calendar.proton.me/u/0";
-    this.nodePath = options.nodePath || process.execPath;
-    this.bootstrapScriptPath =
-      options.bootstrapScriptPath || path.resolve(path.dirname(fileURLToPath(import.meta.url)), "../../scripts/bootstrap-proton-cookies.mjs");
-    this.bootstrapRunner = options.bootstrapRunner || ((runOptions) => runBootstrapScript(this.nodePath, this.bootstrapScriptPath, runOptions));
+    this.bootstrapRunner = options.bootstrapRunner || runBootstrapScript;
     this.debugAuth = Boolean(options.debugAuth);
     this.cooldownMs = readNonNegativeNumber(options.cooldownMs, DEFAULT_COOLDOWN_MS);
     this.lockPollMs = readPositiveNumber(options.lockPollMs, DEFAULT_LOCK_POLL_MS);
@@ -360,8 +356,8 @@ async function fileExists(filePath) {
   }
 }
 
-async function runBootstrapScript(nodePath, scriptPath, options) {
-  const args = [scriptPath, "--output", options.outputFile, "--timeout", String(options.timeoutSeconds), "--poll", String(options.pollSeconds)];
+async function runBootstrapScript(options) {
+  const args = ["--output", options.outputFile, "--timeout", String(options.timeoutSeconds), "--poll", String(options.pollSeconds)];
 
   if (options.chromePath) {
     args.push("--chrome-path", options.chromePath);
@@ -379,25 +375,5 @@ async function runBootstrapScript(nodePath, scriptPath, options) {
     args.push("--headless");
   }
 
-  await new Promise((resolve, reject) => {
-    const child = spawn(nodePath, args, {
-      stdio: ["ignore", "pipe", "pipe"],
-      env: process.env,
-    });
-
-    let stderr = "";
-    child.stderr.on("data", (chunk) => {
-      stderr += chunk.toString();
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-
-      reject(new Error(stderr.trim() || `bootstrap exited with code ${code}`));
-    });
-  });
+  await runCookieBootstrap(args);
 }

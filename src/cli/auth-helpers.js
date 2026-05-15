@@ -1,7 +1,5 @@
-import { spawn } from "node:child_process";
 import { readFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { main as runCookieBootstrap } from "../../scripts/bootstrap-proton-cookies.mjs";
 import { DEFAULT_PROTON_APP_VERSION } from "../constants.js";
 import { assertSafeSecretFile } from "../secret-file-safety.js";
 import { parseMaybeJson, readRetryAfterDetails } from "./api-client.js";
@@ -10,25 +8,14 @@ import { flattenBundleCookies, getSetCookieHeaders, parseCookieHeader } from "./
 import { CliError, sanitizeUpstreamPayload } from "./errors.js";
 
 export async function runBootstrapScript(bootstrapArgs) {
-  const cliPath = fileURLToPath(import.meta.url);
-  const projectRoot = path.resolve(path.dirname(cliPath), "..", "..");
-  const scriptPath = path.join(projectRoot, "scripts", "bootstrap-proton-cookies.mjs");
-
-  await new Promise((resolve, reject) => {
-    const child = spawn(process.execPath, [scriptPath, ...bootstrapArgs], {
-      stdio: "inherit",
-      env: process.env,
-    });
-
-    child.on("error", reject);
-    child.on("close", (code) => {
-      if (code === 0) {
-        resolve();
-        return;
-      }
-      reject(new CliError("LOGIN_FAILED", `Cookie bootstrap failed with exit code ${code}`));
-    });
-  });
+  try {
+    await runCookieBootstrap(bootstrapArgs);
+  } catch (error) {
+    if (error instanceof CliError) {
+      throw error;
+    }
+    throw new CliError("LOGIN_FAILED", error?.message || "Cookie bootstrap failed");
+  }
 }
 
 
