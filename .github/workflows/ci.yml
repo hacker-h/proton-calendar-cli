@@ -12,6 +12,21 @@ on:
         description: Optional checked-in quarantine manifest path for the live Proton canary
         required: false
         type: string
+      live_enable_second_account:
+        description: Enable second-account live tests when PROTON_USERNAME2 and PROTON_PASSWORD2 secrets are configured
+        required: false
+        default: false
+        type: boolean
+      live_enable_invites:
+        description: Enable invite/RSVP live tests; also requires second-account gate
+        required: false
+        default: false
+        type: boolean
+      live_enable_sharing:
+        description: Enable paid/shared-calendar live tests
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "17 4 * * 1"
 
@@ -156,7 +171,7 @@ jobs:
           retention-days: 14
 
   live-proton-canary:
-    name: Required live Proton canary
+    name: Live Proton canary (trusted only)
     runs-on: ubuntu-latest
     timeout-minutes: 30
     if: >-
@@ -188,17 +203,33 @@ jobs:
         env:
           PROTON_USERNAME: ${{ secrets.PROTON_USERNAME }}
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
+          PROTON_USERNAME2: ${{ secrets.PROTON_USERNAME2 }}
+          PROTON_PASSWORD2: ${{ secrets.PROTON_PASSWORD2 }}
+          PROTON_LIVE_ENABLE_SECOND_ACCOUNT: ${{ github.event.inputs.live_enable_second_account || vars.PROTON_LIVE_ENABLE_SECOND_ACCOUNT }}
         run: |
           if [ -z "$PROTON_USERNAME" ] || [ -z "$PROTON_PASSWORD" ]; then
             echo "::error::Required live Proton canary secrets PROTON_USERNAME and PROTON_PASSWORD must be configured for trusted CI runs."
             exit 1
+          fi
+          if printf '%s' "$PROTON_LIVE_ENABLE_SECOND_ACCOUNT" | grep -Eiq '^(1|true|yes|on)$'; then
+            if [ -z "$PROTON_USERNAME2" ] || [ -z "$PROTON_PASSWORD2" ]; then
+              echo "::error::Second-account live tests require PROTON_USERNAME2 and PROTON_PASSWORD2 secrets."
+              exit 1
+            fi
           fi
 
       - name: Bootstrap Proton session
         env:
           PROTON_USERNAME: ${{ secrets.PROTON_USERNAME }}
           PROTON_PASSWORD: ${{ secrets.PROTON_PASSWORD }}
+          PROTON_USERNAME2: ${{ secrets.PROTON_USERNAME2 }}
+          PROTON_PASSWORD2: ${{ secrets.PROTON_PASSWORD2 }}
           PROTON_TEST_CALENDAR_ID: ${{ secrets.PROTON_TEST_CALENDAR_ID }}
+          PROTON_LIVE_PLAN: ${{ vars.PROTON_LIVE_PLAN }}
+          PROTON_LIVE_ENABLE_SECOND_ACCOUNT: ${{ github.event.inputs.live_enable_second_account || vars.PROTON_LIVE_ENABLE_SECOND_ACCOUNT }}
+          PROTON_LIVE_ENABLE_INVITES: ${{ github.event.inputs.live_enable_invites || vars.PROTON_LIVE_ENABLE_INVITES }}
+          PROTON_LIVE_ENABLE_SHARING: ${{ github.event.inputs.live_enable_sharing || vars.PROTON_LIVE_ENABLE_SHARING }}
+          PROTON_LIVE_ATTENDEE_EMAIL: ${{ secrets.PROTON_LIVE_ATTENDEE_EMAIL }}
           COOKIE_BUNDLE_PATH: secrets/proton-cookies.json
           CI_LIVE_QUARANTINE_PATH: ${{ github.event.inputs.live_quarantine_path || vars.CI_LIVE_QUARANTINE_PATH }}
         run: pnpm run ci:live

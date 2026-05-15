@@ -5,9 +5,11 @@ This project is an unofficial Proton Calendar automation tool. Proton Calendar d
 ## Secrets
 
 - Keep generated cookie bundles, API tokens, and runtime env files under `secrets/` or `.tmp/` only.
+- A repo-local `.env` file is allowed only for ProtonMail-style local CLI compatibility. Keep it gitignored, machine-local, and owner-only readable/writable, for example `0600`; the CLI rejects unsafe permissions before loading it.
 - Keep cross-machine local credentials under `encrypted/` only when `git-crypt` is unlocked and intentionally configured.
 - Do not commit plaintext credentials, exported cookie bundles, browser profiles, or CI env files.
 - Store CI credentials as GitHub Actions repository secrets or GitLab protected, masked CI/CD variables.
+- Store second-account live test credentials as `PROTON_USERNAME2` and `PROTON_PASSWORD2` secrets only; enable their tests with explicit `PROTON_LIVE_ENABLE_SECOND_ACCOUNT=1` plus a feature gate.
 
 ## Reporting Issues
 

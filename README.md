@@ -126,6 +126,8 @@ export PC_API_BASE_URL=http://127.0.0.1:8787
 export PC_API_TOKEN=replace-me
 ```
 
+`pc`, `pnpm start`, and the local live canary load an optional `.env` file from the current working directory, matching ProtonMail-style local CLI setup. Real shell environment variables take precedence over `.env` values. Keep `.env` local-only; it is ignored by git and must be owner-only readable/writable, for example `chmod 600 .env`. For ProtonMail-style credential names, `PROTONMAIL_USERNAME` and `PROTONMAIL_PASSWORD` are accepted as aliases for `PROTON_USERNAME` and `PROTON_PASSWORD`; `PROTONMAIL_USERNAME2` and `PROTONMAIL_PASSWORD2` map to `PROTON_USERNAME2` and `PROTON_PASSWORD2` for opt-in second-account live tests.
+
 The local API server requires a bearer token and calendar scope. `pc login` generates these in `secrets/pc-server.env`; manual setup needs at least:
 
 ```bash
@@ -232,7 +234,9 @@ pnpm test:live:cli     # requires live Proton env/session
 
 Pull-request CI runs the required no-quota local gate: frozen pnpm install, static ESLint/checkJs checks, mocked unit tests with an uploaded JUnit report, the packaged `pc` binary smoke, and the npm publish-readiness check. The package smoke packs this checkout, verifies required package files and Node engine metadata, installs the tarball with engine checks enabled, and then runs `pc --help` plus a JSON config-error path from the installed package. The npm readiness check validates publish metadata, the package `files` allowlist, the `pc` bin target, required README/LICENSE/CHANGELOG inclusion, Node engines, and sanitized `npm pack --dry-run` plus `npm publish --dry-run` output without npm credentials.
 
-The live Proton canary is required for trusted CI contexts: pushes to `main`, scheduled/manual runs, and same-repository pull requests. It installs Chromium, requires dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests from forks do not receive repository secrets and therefore skip the live canary; they still run the offline gates.
+The live Proton canary runs only for trusted CI contexts: pushes to `main`, scheduled/manual runs, and same-repository pull requests. It installs Chromium, requires dedicated `PROTON_USERNAME` and `PROTON_PASSWORD` secrets, bootstraps a temporary cookie bundle, writes `secrets/ci-live.env`, starts the local API with that environment, and then runs live tests against the running API. Pull requests from forks do not receive repository secrets and therefore skip the live canary; they still run the offline gates.
+
+Plan-gated live tests must stay explicit. Free-account-safe tests are the default. Paid, shared-calendar, invite/RSVP, availability, appointment-scheduling, subscribed-calendar, and holiday-calendar tests must be gated with `PROTON_LIVE_ENABLE_*` flags. Second-account tests require `PROTON_LIVE_ENABLE_SECOND_ACCOUNT=1` plus `PROTON_USERNAME2` and `PROTON_PASSWORD2` GitHub Actions secrets.
 
 After live tests run, the canary compares sanitized response shapes from the local API bridge against `test/fixtures/live-drift-baseline.json` and uploads `reports/live-drift.json`. Missing surfaces or required fields fail with `proton_api_drift`; additive fields are reported for review but do not fail the canary. Drift reports must contain only schema metadata and next-action guidance, never cookies, bearer tokens, event contents, or raw Proton payloads.
 
