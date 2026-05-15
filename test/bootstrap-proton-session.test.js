@@ -4,6 +4,7 @@ import {
   BootstrapError,
   assertSafeDiagnostics,
   classifyLoginError,
+  isAuthenticatedCalendarUrl,
   normalizeBootstrapError,
   parseArgs,
   safeUrlSummary,
@@ -42,6 +43,14 @@ test("safeUrlSummary strips query strings and external URLs", () => {
     host: "external",
     path: "/",
   });
+});
+
+test("authenticated calendar urls cover app-shell readiness paths", () => {
+  assert.equal(isAuthenticatedCalendarUrl("https://calendar.proton.me/u/0/"), true);
+  assert.equal(isAuthenticatedCalendarUrl("https://calendar.proton.me/u/0/week"), true);
+  assert.equal(isAuthenticatedCalendarUrl("https://calendar.proton.me/login"), false);
+  assert.equal(isAuthenticatedCalendarUrl("https://account.proton.me/apps"), false);
+  assert.equal(isAuthenticatedCalendarUrl("https://example.test/u/0"), false);
 });
 
 test("success summary excludes UID and cookie values", () => {
