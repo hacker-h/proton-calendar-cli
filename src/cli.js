@@ -6,6 +6,7 @@ import { HELP_TEXT } from "./cli/constants.js";
 import { readBaseUrl, readLocalConfig, readToken } from "./cli/config.js";
 import { CliError, readCliExitCode, toCliErrorPayload } from "./cli/errors.js";
 import { write, writeOutput } from "./cli/output.js";
+import { loadDotEnv } from "./env-file.js";
 import { runListCommand } from "./cli/commands/list-command.js";
 import { runCreateCommand, runDeleteCommand, runEditCommand } from "./cli/commands/mutation-command.js";
 import { runCalendarsCommand } from "./cli/commands/calendars-command.js";
@@ -14,13 +15,17 @@ import { runLoginCommand } from "./cli/commands/login-command.js";
 import { runLogoutCommand } from "./cli/commands/logout-command.js";
 
 export async function runPcCli(argv, options = {}) {
-  const env = options.env || process.env;
   const fetchImpl = options.fetchImpl || fetch;
   const now = options.now || (() => Date.now());
   const stdout = options.stdout || process.stdout;
   const stderr = options.stderr || process.stderr;
 
   try {
+    const env = options.env || process.env;
+    if (!options.env) {
+      loadDotEnv(env, { cwd: options.cwd });
+    }
+
     const normalizedArgs = Array.isArray(argv) ? [...argv] : [];
     while (normalizedArgs[0] === "--") {
       normalizedArgs.shift();
