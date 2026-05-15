@@ -26,49 +26,50 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(auth.body.data.defaultCalendarId, config.calendarId);
     });
 
-    await t.test("list supports generic route, scoped route, and pagination", async () => {
-      const title = buildEventTitle(config, "pagination");
-      const createA = await apiRequest(config, "POST", buildCollectionRoute(config), {
-        title: `${title}-a`,
-        start: "2026-03-05T08:00:00.000Z",
-        end: "2026-03-05T08:30:00.000Z",
-        timezone: "UTC",
-      });
-      const createB = await apiRequest(config, "POST", buildCollectionRoute(config, undefined, { useCalendarRoute: false }), {
-        title: `${title}-b`,
-        start: "2026-03-05T09:00:00.000Z",
-        end: "2026-03-05T09:30:00.000Z",
-        timezone: "UTC",
-      });
-      assert.equal(createA.status, 201);
-      assert.equal(createB.status, 201);
+    await t.test("list supports date ranges, pagination, and calendar-scoped routes", async () => {
+      const title = buildEventTitle(config, "list-api");
+      const fixtures = [
+        [`${title}-a`, "2026-03-05T08:00:00.000Z", "2026-03-05T08:30:00.000Z"],
+        [`${title}-b`, "2026-03-05T09:00:00.000Z", "2026-03-05T09:30:00.000Z"],
+        [`${title}-outside`, "2026-03-06T09:00:00.000Z", "2026-03-06T09:30:00.000Z"],
+      ];
 
-      const scopedList = await apiRequest(
-        config,
-        "GET",
-        buildCollectionRoute(config, { start: "2026-03-05T00:00:00.000Z", end: "2026-03-06T00:00:00.000Z", limit: 1 })
-      );
-      assert.equal(scopedList.status, 200);
-      assert.equal(Array.isArray(scopedList.body.data.events), true);
-      assert.equal(scopedList.body.data.events.length, 1);
-      assert.equal(typeof scopedList.body.data.nextCursor, "string");
+      for (const [eventTitle, start, end] of fixtures) {
+        const created = await apiRequest(config, "POST", buildCollectionRoute(config), {
+          title: eventTitle,
+          start,
+          end,
+          timezone: "UTC",
+        });
+        assert.equal(created.status, 201);
+      }
+
+      const paged = await collectPagedLiveTitles(config, title, {
+        start: "2026-03-05T00:00:00.000Z",
+        end: "2026-03-06T00:00:00.000Z",
+      });
+      assert.equal(paged.sawCursor, true);
+      assert.deepEqual(paged.titles, [`${title}-a`, `${title}-b`]);
 
       const genericList = await apiRequest(
         config,
         "GET",
         buildCollectionRoute(
           config,
-          {
-            start: "2026-03-05T00:00:00.000Z",
-            end: "2026-03-06T00:00:00.000Z",
-            cursor: scopedList.body.data.nextCursor,
-            limit: 5,
-          },
+          { start: "2026-03-05T00:00:00.000Z", end: "2026-03-07T00:00:00.000Z", limit: 50 },
           { useCalendarRoute: false }
         )
       );
       assert.equal(genericList.status, 200);
-      assert.equal(genericList.body.data.events.some((event) => String(event.title).startsWith(title)), true);
+      assert.deepEqual(liveTitles(genericList.body.data.events, title), [`${title}-a`, `${title}-b`, `${title}-outside`]);
+
+      const dateRange = await apiRequest(
+        config,
+        "GET",
+        buildCollectionRoute(config, { start: "2026-03-06T00:00:00.000Z", end: "2026-03-07T00:00:00.000Z", limit: 50 })
+      );
+      assert.equal(dateRange.status, 200);
+      assert.deepEqual(liveTitles(dateRange.body.data.events, title), [`${title}-outside`]);
     });
 
     await t.test("validation errors return 400", async () => {
@@ -554,5 +555,31 @@ function occurrenceStarts(events, title) {
   return events
     .filter((event) => event.title === title)
     .map((event) => event.occurrenceStart || event.start)
+    .sort();
+}
+
+async function collectPagedLiveTitles(config, prefix, range) {
+  const titles = [];
+  let cursor = null;
+  let sawCursor = false;
+
+  for (let page = 0; page < 200; page += 1) {
+    const response = await apiRequest(config, "GET", buildCollectionRoute(config, { ...range, cursor, limit: 1 }));
+    assert.equal(response.status, 200);
+    titles.push(...liveTitles(response.body.data.events, prefix));
+    cursor = response.body.data.nextCursor || null;
+    sawCursor = sawCursor || Boolean(cursor);
+    if (!cursor || titles.length >= 2) {
+      break;
+    }
+  }
+
+  return { titles: titles.sort(), sawCursor };
+}
+
+function liveTitles(events, prefix) {
+  return events
+    .filter((event) => String(event.title || "").startsWith(prefix))
+    .map((event) => event.title)
     .sort();
 }
