@@ -145,7 +145,8 @@ async function waitForAuthenticatedCalendar(page, timeoutMs) {
 
   const deadline = Date.now() + timeoutMs;
   while (Date.now() < deadline) {
-    if ((await hasPersistedCalendarSession(page)) && (await isAnyVisible(page, CALENDAR_READY_SELECTORS))) {
+    const hasSession = await hasPersistedCalendarSession(page);
+    if (hasSession && (isAuthenticatedCalendarUrl(page.url()) || await isAnyVisible(page, CALENDAR_READY_SELECTORS))) {
       return;
     }
 
@@ -656,6 +657,15 @@ function safeUrlSummary(value) {
   }
 }
 
+function isAuthenticatedCalendarUrl(value) {
+  try {
+    const url = new URL(String(value || ""));
+    return url.hostname.toLowerCase() === "calendar.proton.me" && /^\/u\/\d+(?:\/|$)/.test(url.pathname);
+  } catch {
+    return false;
+  }
+}
+
 function sanitizeCookieName(name) {
   return String(name || "")
     .replace(/^(AUTH|REFRESH)-.+$/i, "$1-<redacted>")
@@ -743,6 +753,7 @@ export {
   BootstrapError,
   assertSafeDiagnostics,
   classifyLoginError,
+  isAuthenticatedCalendarUrl,
   normalizeBootstrapError,
   parseArgs,
   safeUrlSummary,
