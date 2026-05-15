@@ -404,22 +404,7 @@ export class ProtonCalendarClient {
       return this.cachedContext;
     }
 
-    const uid = await this.#getUID();
-    const persistedSessions = await this.sessionStore.getPersistedSessions();
-    const persistedSession = findPersistedSession(persistedSessions, uid);
-    if (!persistedSession?.blob) {
-      throw new ApiError(
-        401,
-        "SESSION_BLOB_MISSING",
-        "Persisted Proton session blob is missing; rerun cookie bootstrap"
-      );
-    }
-
-    const localKeyPayload = await this.#requestJSON("GET", "/api/auth/v4/sessions/local/key", { uid });
-    const keyPassword = await decryptPersistedSessionKeyPassword({
-      clientKeyBase64: localKeyPayload?.ClientKey,
-      persistedBlobBase64: persistedSession.blob,
-    });
+    const { uid, keyPassword } = await this.#getContextAuth();
 
     const [userPayload, addressesPayload, bootstrapPayload] = await Promise.all([
       this.#requestJSON("GET", "/api/core/v4/users", { uid }),
@@ -506,6 +491,41 @@ export class ProtonCalendarClient {
     };
 
     return this.cachedContext;
+  }
+
+  async #getContextAuth() {
+    const uid = await this.#getUID();
+    const persistedSessions = await this.sessionStore.getPersistedSessions();
+    const candidates = await this.sessionStore.getUIDCandidates();
+    const candidatesWithSessions = candidates.filter((candidate) => findPersistedSession(persistedSessions, candidate, { exact: true })?.blob);
+    const keyCandidates = [...new Set([uid, ...candidatesWithSessions])];
+    let lastError = null;
+
+    for (const candidate of keyCandidates) {
+      const persistedSession = findPersistedSession(persistedSessions, candidate, { exact: true });
+      if (!persistedSession?.blob) {
+        continue;
+      }
+      try {
+        const localKeyPayload = await this.#requestJSON("GET", "/api/auth/v4/sessions/local/key", { uid: candidate, allowAuthFailure: false });
+        const keyPassword = await decryptPersistedSessionKeyPassword({
+          clientKeyBase64: localKeyPayload?.ClientKey,
+          persistedBlobBase64: persistedSession.blob,
+        });
+        return { uid, keyPassword };
+      } catch (error) {
+        lastError = error;
+      }
+    }
+
+    if (lastError) {
+      throw lastError;
+    }
+    throw new ApiError(
+      401,
+      "SESSION_BLOB_MISSING",
+      "Persisted Proton session blob is missing; rerun cookie bootstrap"
+    );
   }
 
   async #attemptAuthRefresh(uid) {
@@ -724,7 +744,7 @@ function normalizeCalendar(calendar) {
   };
 }
 
-function findPersistedSession(persistedSessions, uid) {
+function findPersistedSession(persistedSessions, uid, options = {}) {
   const entries = Object.entries(persistedSessions || {});
   if (entries.length === 0) {
     return null;
@@ -734,6 +754,10 @@ function findPersistedSession(persistedSessions, uid) {
     if (value && typeof value === "object" && value.UID === uid && value.blob) {
       return value;
     }
+  }
+
+  if (options.exact) {
+    return null;
   }
 
   for (const [, value] of entries) {
