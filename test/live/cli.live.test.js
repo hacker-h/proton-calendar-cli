@@ -28,6 +28,7 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await testTimedBerlinCrud(env);
     await testAllDayUtc(env);
     await testRecurrenceCrud(env);
+    await testNotificationCrud(env);
   } finally {
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
@@ -251,6 +252,64 @@ async function testRecurrenceCrud(env) {
   ], env);
   assert.equal(deleteFollowing.exitCode, 5);
   assert.equal(deleteFollowing.payload.error.code, "UPSTREAM_ERROR");
+}
+
+async function testNotificationCrud(env) {
+  const title = buildEventTitle(config, "cli-notifications");
+  const notifications = [{ Type: 1, Trigger: "-PT10M" }];
+  const encodedNotifications = JSON.stringify(notifications);
+  const create = await runJsonCli([
+    "new",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${title}`,
+    "description=live cli notifications",
+    "location=CLI Reminder",
+    "start=2026-03-28T10:00:00.000Z",
+    "end=2026-03-28T10:30:00.000Z",
+    "timezone=UTC",
+    `notifications=${encodedNotifications}`,
+  ], env);
+  assert.equal(create.exitCode, 0);
+  assert.deepEqual(create.payload.data.notifications, notifications);
+  const eventId = create.payload.data.id;
+
+  const updatedTitle = buildEventTitle(config, "cli-notifications-renamed");
+  const renamed = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `title=${updatedTitle}`,
+  ], env);
+  assert.equal(renamed.exitCode, 0);
+  assert.deepEqual(renamed.payload.data.notifications, notifications);
+
+  const nulled = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "notifications=null",
+  ], env);
+  assert.equal(nulled.exitCode, 0);
+  assert.equal(nulled.payload.data.notifications, null);
+
+  const restored = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    `notifications=${encodedNotifications}`,
+  ], env);
+  assert.equal(restored.exitCode, 0);
+  assert.deepEqual(restored.payload.data.notifications, notifications);
+
+  const cleared = await runJsonCli([
+    "edit",
+    eventId,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--clear",
+    "notifications",
+  ], env);
+  assert.equal(cleared.exitCode, 0);
+  assert.equal(cleared.payload.data.notifications, null);
 }
 
 async function runJsonCli(argv, env = {
