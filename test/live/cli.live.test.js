@@ -29,6 +29,8 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await testAllDayUtc(env);
     await testRecurrenceCrud(env);
     await testNotificationCrud(env);
+    await testListWindows(env);
+    await testListFiltersAndOutput(env);
   } finally {
     await cleanupEvents(config, RANGE_START, RANGE_END);
   }
@@ -324,16 +326,72 @@ async function testNotificationCrud(env) {
   assert.equal(cleared.payload.data.notifications, null);
 }
 
+async function testListWindows(env) {
+  const prefix = buildEventTitle(config, "cli-list-window");
+  await createCliListFixtures(env, prefix);
+
+  await assertListWindow(env, ["ls", "today"], prefix, [`${prefix}-today`]);
+  await assertListWindow(env, ["ls", "tomorrow"], prefix, [`${prefix}-tomorrow`]);
+  await assertListWindow(env, ["ls", "next", "7"], prefix, [`${prefix}-today`, `${prefix}-tomorrow`, `${prefix}-next`]);
+  await assertListWindow(env, ["ls", "w"], prefix, [`${prefix}-week`, `${prefix}-today`, `${prefix}-tomorrow`]);
+  await assertListWindow(env, ["ls", "m", "3", "2026"], prefix, [
+    `${prefix}-week`,
+    `${prefix}-today`,
+    `${prefix}-tomorrow`,
+    `${prefix}-next`,
+    `${prefix}-month`,
+  ]);
+  await assertYearListWindow(env, prefix, [
+    `${prefix}-week`,
+    `${prefix}-today`,
+    `${prefix}-tomorrow`,
+    `${prefix}-next`,
+    `${prefix}-month`,
+  ]);
+  await assertListWindow(env, ["ls", "--from", "2026-03-12", "--to", "2026-03-12"], prefix, [`${prefix}-tomorrow`]);
+}
+
+async function testListFiltersAndOutput(env) {
+  const prefix = buildEventTitle(config, "cli-list-filter");
+  await createCliListFixtures(env, prefix);
+
+  await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--title", `${prefix}-today`], prefix, [`${prefix}-today`]);
+  await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--description", "beta workshop"], prefix, [`${prefix}-tomorrow`]);
+  await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--location", "room c"], prefix, [`${prefix}-next`]);
+  await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--protected"], prefix, [
+    `${prefix}-week`,
+    `${prefix}-today`,
+    `${prefix}-next`,
+  ]);
+  await assertListWindow(env, ["ls", "--from", "2026-03-01", "--to", "2026-03-31", "--unprotected"], prefix, [
+    `${prefix}-tomorrow`,
+    `${prefix}-month`,
+  ]);
+
+  const json = await runJsonCli(["ls", "--from", "2026-03-11", "--to", "2026-03-11", "--title", prefix, "-o", "json"], env, { now: FIXED_NOW });
+  assert.equal(json.exitCode, 0);
+  assert.deepEqual(liveCliTitles(json.payload.data.events, prefix), [`${prefix}-today`]);
+
+  const table = await runRawCli(["ls", "--from", "2026-03-11", "--to", "2026-03-11", "--title", prefix, "-o", "table"], env, { now: FIXED_NOW });
+  assert.equal(table.exitCode, 0);
+  assert.match(table.stdout, /^id\tstart\tend\ttitle\tlocation\tprotected/m);
+  assert.match(table.stdout, new RegExp(`${escapeRegExp(prefix)}-today`));
+  assert.equal(table.stderr, "");
+}
+
+const FIXED_NOW = () => Date.parse("2026-03-11T15:00:00.000Z");
+
 async function runJsonCli(argv, env = {
   PC_API_BASE_URL: config.apiBaseUrl,
   PC_API_TOKEN: config.apiToken,
-}) {
+}, options = {}) {
   const stdout = createWriter();
   const stderr = createWriter();
   const exitCode = await runPcCli(argv, {
     env,
     stdout,
     stderr,
+    now: options.now,
   });
 
   const output = exitCode === 0 ? stdout.value() : stderr.value();
@@ -341,6 +399,100 @@ async function runJsonCli(argv, env = {
     exitCode,
     payload: output ? JSON.parse(output) : null,
   };
+}
+
+async function runRawCli(argv, env, options = {}) {
+  const stdout = createWriter();
+  const stderr = createWriter();
+  const exitCode = await runPcCli(argv, {
+    env,
+    stdout,
+    stderr,
+    now: options.now,
+  });
+
+  return {
+    exitCode,
+    stdout: stdout.value(),
+    stderr: stderr.value(),
+  };
+}
+
+async function createCliListFixtures(env, prefix) {
+  const fixtures = [
+    { suffix: "week", start: "2026-03-10T09:00:00.000Z", description: "alpha planning", location: "Room A", protected: true },
+    { suffix: "today", start: "2026-03-11T10:00:00.000Z", description: "alpha workshop", location: "Room A", protected: true },
+    { suffix: "tomorrow", start: "2026-03-12T10:00:00.000Z", description: "beta workshop", location: "Room B", protected: false },
+    { suffix: "next", start: "2026-03-17T10:00:00.000Z", description: "gamma lab", location: "Room C", protected: true },
+    { suffix: "month", start: "2026-03-25T10:00:00.000Z", description: "delta lab", location: "Room D", protected: false },
+  ];
+
+  for (const fixture of fixtures) {
+    const startMs = Date.parse(fixture.start);
+    const created = await runJsonCli([
+      "new",
+      ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+      `title=${prefix}-${fixture.suffix}`,
+      `description=${fixture.description}`,
+      `location=${fixture.location}`,
+      `start=${fixture.start}`,
+      `end=${new Date(startMs + 30 * 60 * 1000).toISOString()}`,
+      "timezone=UTC",
+      `protected=${fixture.protected}`,
+      "notifications=null",
+    ], env, { now: FIXED_NOW });
+    assert.equal(created.exitCode, 0);
+  }
+}
+
+async function assertListWindow(env, argv, prefix, expectedTitles) {
+  const list = await runJsonCli([
+    ...argv,
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    ...(argv.includes("--title") ? [] : ["--title", prefix]),
+  ], env, { now: FIXED_NOW });
+  assert.equal(list.exitCode, 0);
+  assert.deepEqual(liveCliTitles(list.payload.data.events, prefix), [...expectedTitles].sort());
+}
+
+async function assertYearListWindow(env, prefix, expectedTitles) {
+  const year = await runJsonCli([
+    "ls",
+    "y",
+    "2026",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--title",
+    prefix,
+  ], env, { now: FIXED_NOW });
+  if (year.exitCode === 0) {
+    assert.deepEqual(liveCliTitles(year.payload.data.events, prefix), [...expectedTitles].sort());
+    return;
+  }
+
+  // Proton may reject broad year scans with private API or range limits; verify bounded month fallback instead.
+  assert.ok(year.payload?.error?.code, "year list failure should include a stable CLI error code");
+  const march = await runJsonCli([
+    "ls",
+    "m",
+    "3",
+    "2026",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--title",
+    prefix,
+  ], env, { now: FIXED_NOW });
+  assert.equal(march.exitCode, 0);
+  assert.deepEqual(liveCliTitles(march.payload.data.events, prefix), [...expectedTitles].sort());
+}
+
+function liveCliTitles(events, prefix) {
+  return events
+    .filter((event) => String(event.title || "").startsWith(prefix))
+    .map((event) => event.title)
+    .sort();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }
 
 function createWriter() {
