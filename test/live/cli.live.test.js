@@ -35,6 +35,7 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
     await t.test("recurring event supports scoped edit and delete arguments", () => testRecurrenceCrud(env));
     await t.test("recurrence fields support interval exDates byDay weekStart byMonthDay and until", () => testRecurrenceFieldMatrix(env));
     await t.test("notifications support raw friendly preserve and clear flows", () => testNotificationCrud(env));
+    await t.test("ICS import and export round trip through CLI", () => testIcsImportExport(env));
     await t.test("patch file merges with assignments clear and calendar routing", () => testPatchFileAndCalendarRouting(env));
     let listFixturePrefix;
     await t.test("list shortcuts cover deterministic live windows", async () => {
@@ -549,6 +550,49 @@ async function testListFiltersAndOutput(env, prefix) {
   assert.match(table.stdout, /^id\tstart\tend\ttitle\tlocation\tprotected/m);
   assert.match(table.stdout, new RegExp(`${escapeRegExp(prefix)}-today`));
   assert.equal(table.stderr, "");
+}
+
+async function testIcsImportExport(env) {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-live-ics-"));
+  const title = buildEventTitle(config, "ics-cli-import");
+  const filePath = path.join(tmpDir, "import.ics");
+  await writeFile(filePath, [
+    "BEGIN:VCALENDAR",
+    "VERSION:2.0",
+    "BEGIN:VEVENT",
+    "UID:live-cli-import@example.test",
+    `SUMMARY:${title}`,
+    "DESCRIPTION:live cli ics import",
+    "LOCATION:ICS CLI",
+    "DTSTART:20260309T100000Z",
+    "DTEND:20260309T103000Z",
+    "END:VEVENT",
+    "END:VCALENDAR",
+    "",
+  ].join("\r\n"), "utf8");
+
+  const imported = await runJsonCli([
+    "import",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    filePath,
+  ], env);
+  assert.equal(imported.exitCode, 0);
+  assert.equal(imported.payload.data.imported, 1);
+  assert.equal(imported.payload.data.events[0].title, title);
+
+  const exported = await runRawCli([
+    "export",
+    ...(config.calendarId ? ["--calendar", config.calendarId] : []),
+    "--from",
+    "2026-03-09",
+    "--to",
+    "2026-03-09",
+  ], env);
+  assert.equal(exported.exitCode, 0);
+  assert.match(exported.stdout, /BEGIN:VCALENDAR/);
+  assert.match(exported.stdout, new RegExp(escapeRegExp(title)));
+  assert.equal(exported.stdout.includes(config.apiToken), false);
+  assert.equal(exported.stderr, "");
 }
 
 const FIXED_NOW = () => Date.parse("2026-03-11T15:00:00.000Z");
