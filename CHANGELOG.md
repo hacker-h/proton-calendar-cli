@@ -1,3 +1,12 @@
+# [1.12.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.11.0...v1.12.0) (2026-05-16)
+
+
+### Features
+
+* **api:** add ICS parser and exporter ([674b8e2](https://github.com/hacker-h/proton-calendar-cli/commit/674b8e2023ec2aab53c3ecbfd485c5d29e45f9a0))
+* **api:** expose ICS import export routes ([6b3e8aa](https://github.com/hacker-h/proton-calendar-cli/commit/6b3e8aacaeb2f5a3ad6ca1dda41ebb1b3a57a179))
+* **cli:** add ICS import export commands ([04e0649](https://github.com/hacker-h/proton-calendar-cli/commit/04e0649b18dba42b0c0c5d0c9d560aeca283f79e))
+
 # [1.11.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.10.0...v1.11.0) (2026-05-15)
 
 
