@@ -70,6 +70,8 @@ pc logout
 | `pc doctor auth` | Check whether the saved Proton session works or can refresh | `pc doctor auth` |
 | `pc calendars` | List discovered calendars and configured defaults | `pc calendars -o table` |
 | `pc ls` | List events; defaults to current ISO week | `pc ls next 7 --title review` |
+| `pc export` | Export a bounded date range as local ICS from normalized events | `pc export --from 2026-07-01 --to 2026-07-31 > calendar.ics` |
+| `pc import <file>` | Import a bounded local ICS file through normal event creation | `pc import calendar.ics` |
 | `pc new` | Create an event from `field=value` pairs | `pc new title="Demo" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC` |
 | `pc edit` | PATCH-style update; only provided fields are sent | `pc edit evt-1 title="Updated" --clear description` |
 | `pc rm` | Delete an event or recurring scope | `pc rm evt-1 --scope series` |
@@ -92,6 +94,21 @@ pc ls --title review --location "room b"
 pc ls next 7 --title review --protected
 pc ls -o table
 ```
+
+ICS import/export examples:
+
+```bash
+pc export --from 2026-07-01 --to 2026-07-31 > july.ics
+pc export --calendar cal_123 --start 2026-07-01T00:00:00Z --end 2026-08-01T00:00:00Z > july.ics
+pc import july.ics
+pc import --calendar cal_123 july.ics
+```
+
+ICS support is intentionally bounded and local-API based. Export serializes the normalized events returned by `CalendarService.listEvents()`; import parses supported `VEVENT`s and creates each event through the same `CalendarService.createEvent()` path used by `pc new`. The implementation does not use or claim support for any official Proton import/export endpoint.
+
+Supported ICS fields are `UID`, `SUMMARY`, `DESCRIPTION`, `LOCATION`, `DTSTART`, `DTEND`, all-day `VALUE=DATE`, UTC dates, `TZID` datetime values, and `RRULE` shapes already supported by the existing recurrence parser. `VTIMEZONE` components are accepted only as timezone metadata; unsupported components such as `VALARM` and unsupported `VEVENT` properties such as attendees, organizer/invite data, attachments, URLs, categories, and arbitrary passthrough fields are rejected with diagnostics before import mutations. File parsing is capped at 10 MB and 15000 events; this local create-event importer creates at most 50 events per request to avoid long-running private API mutation loops on free accounts.
+
+Privacy note: ICS files contain event titles, descriptions, locations, and schedules in plain text. Keep exported files out of CI artifacts and shared logs unless you have reviewed the contents.
 
 Supported event fields:
 
@@ -381,6 +398,7 @@ pnpm run release:dry-run
 - `recurrence.count` and `recurrence.until` cannot both be set.
 - Proton currently rejects `scope=following` deletes in live recurrence tests with an upstream `UPSTREAM_ERROR`; use `scope=single` or `scope=series` deletes until that private API behavior is confirmed.
 - Reminder controls support common friendly syntax and Proton-compatible `Notifications` objects directly; no attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
+- ICS import/export is limited to simple local events and recurrence rules already supported by this CLI; alarms, attendees, organizer/invite data, attachments, categories, and arbitrary passthrough fields are rejected.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
 
 ## License
