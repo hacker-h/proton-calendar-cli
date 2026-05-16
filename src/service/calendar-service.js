@@ -96,21 +96,21 @@ export class CalendarService {
     const limit = readLimit(input.limit);
     const offset = parseCursor(input.cursor);
 
-    // Recurrence expansion needs the complete range before sorting and cursor slicing.
-    const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
-    const normalized = rawEvents.map(normalizeEvent);
-    const filtered = normalized.filter((event) => event.calendarId === calendarId);
-    const expanded = expandEventsInRange(filtered, range.start, range.end, {
-      maxIterations: this.recurrenceMaxIterations,
-    });
-
-    expanded.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    const expanded = await this.#listExpandedEventsInRange(calendarId, range);
     const page = expanded.slice(offset, offset + limit);
     const nextCursor = offset + limit < expanded.length ? String(offset + limit) : null;
 
     return {
       events: page,
       nextCursor,
+    };
+  }
+
+  async listEventsForExport(input, options = {}) {
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+    const range = validateRange(input.start, input.end);
+    return {
+      events: await this.#listExpandedEventsInRange(calendarId, range),
     };
   }
 
@@ -162,6 +162,17 @@ export class CalendarService {
 
     this.#assertExpectedCalendar(created, calendarId);
     return created;
+  }
+
+  validateCreateEvents(payloads, options = {}) {
+    if (!Array.isArray(payloads)) {
+      throw new ApiError(400, "INVALID_PAYLOAD", "events must be an array");
+    }
+    const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
+    for (const payload of payloads) {
+      assertCalendarPayload(payload, calendarId);
+      validateCreatePayload(payload);
+    }
   }
 
   async updateEvent(eventId, payload, idempotencyKey, options = {}) {
@@ -249,6 +260,17 @@ export class CalendarService {
       pageSize: EVENT_FETCH_PAGE_SIZE,
       nextCursor: cursor,
     });
+  }
+
+  async #listExpandedEventsInRange(calendarId, range) {
+    const rawEvents = await this.#fetchAllEventsInRange(calendarId, range);
+    const normalized = rawEvents.map(normalizeEvent);
+    const filtered = normalized.filter((event) => event.calendarId === calendarId);
+    const expanded = expandEventsInRange(filtered, range.start, range.end, {
+      maxIterations: this.recurrenceMaxIterations,
+    });
+    expanded.sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
+    return expanded;
   }
 
   #resolveCalendarId(calendarId, options = {}) {

@@ -17,6 +17,8 @@ Usage:
   pc doctor auth [options]
   pc calendars [options]
   pc ls [today|tomorrow|next N|w|w+|w++|m|y|all] [--protected|--unprotected] [--title TEXT] [--description TEXT] [--location TEXT] [args]
+  pc export --from YYYY-MM-DD --to YYYY-MM-DD [--calendar ID]
+  pc import <file.ics> [--calendar ID]
   pc new <field=value...> [--tz TIMEZONE] [--dry-run]
   pc edit <eventId> <field=value...> [--tz TIMEZONE] [--clear FIELD] [--dry-run]
   pc rm <eventId>
@@ -39,6 +41,8 @@ Examples:
   pc ls --title review
   pc ls --description workshop
   pc ls --location "room a"
+  pc export --from 2026-07-01 --to 2026-07-31 > calendar.ics
+  pc import calendar.ics
   pc new title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC
   pc new --dry-run title="Design review" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z
   pc new title="Reminder" start=2026-03-10T10:00:00Z end=2026-03-10T10:30:00Z timezone=UTC notifications='[{"Type":1,"Trigger":"-PT10M"}]'
@@ -95,6 +99,12 @@ List options:
   --to <date>          Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (inclusive through end of day)
   --start <datetime>   Range start; YYYY-MM-DD advances to 00:00:00Z (same as --from)
   --end <datetime>     Range end; YYYY-MM-DD advances to 00:00:00Z of the next day (same as --to)
+
+ICS options:
+  pc export requires --from/--to or --start/--end and writes text/calendar to stdout
+  pc import accepts one local .ics file, max 10 MB and max 15000 VEVENTs
+  Supported ICS fields: UID, SUMMARY, DESCRIPTION, LOCATION, DTSTART, DTEND, all-day VALUE=DATE, TZID/UTC, RRULE
+  Unsupported VEVENT properties and components are rejected before import mutations
 
 Mutation fields:
   reminder           Friendly single reminder, e.g. 10m, 1h, 2d

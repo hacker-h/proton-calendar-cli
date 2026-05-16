@@ -218,6 +218,212 @@ test("supports multi-calendar explicit routes when target lock is disabled", asy
   }
 });
 
+test("imports and exports ICS through default calendar event path", async () => {
+  const setup = await createFixture();
+  try {
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "BEGIN:VEVENT",
+      "UID:api-import-1",
+      "SUMMARY:ICS import",
+      "DESCRIPTION:local path only",
+      "LOCATION:Room A",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n");
+
+    const imported = await apiRequest(setup, "POST", "/v1/events/ics", { ics });
+    assert.equal(imported.status, 201);
+    assert.equal(imported.body.data.imported, 1);
+    assert.equal(imported.body.data.events[0].title, "ICS import");
+    assert.equal(imported.body.data.events[0].description, "local path only");
+
+    const exported = await fetch(`${setup.api.baseUrl}/v1/events/ics?start=2026-04-09T00:00:00.000Z&end=2026-04-10T00:00:00.000Z`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    const body = await exported.text();
+    assert.equal(exported.status, 200);
+    assert.match(exported.headers.get("content-type"), /text\/calendar/);
+    assert.match(body, /BEGIN:VCALENDAR/);
+    assert.match(body, /SUMMARY:ICS import/);
+    assert.match(body, /DESCRIPTION:local path only/);
+    assert.equal(body.includes("test-token"), false);
+    assert.equal(body.includes("valid-session"), false);
+    assert.deepEqual(setup.proton.mutationCalls().map((call) => call.idempotencyKey), ["test-idempotency-key:0"]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS export fetches raw event pages once before serialization", async () => {
+  const listCalls = [];
+  const setup = await createFixture({ listCalls });
+  try {
+    for (let index = 0; index < 250; index += 1) {
+      const start = new Date(Date.UTC(2026, 3, 9, 0, index, 0, 0));
+      const end = new Date(start.getTime() + 60 * 1000);
+      await setup.proton.client.createEvent({
+        calendarId: setup.proton.primaryCalendarId,
+        event: {
+          title: `Export ${index}`,
+          start: start.toISOString(),
+          end: end.toISOString(),
+          timezone: "UTC",
+          allDay: false,
+          protected: true,
+          notifications: null,
+        },
+      });
+    }
+
+    const exported = await fetch(`${setup.api.baseUrl}/v1/events/ics?start=2026-04-09T00:00:00.000Z&end=2026-04-10T00:00:00.000Z`, {
+      headers: { Authorization: "Bearer test-token" },
+    });
+    const body = await exported.text();
+    assert.equal(exported.status, 200);
+    assert.equal((body.match(/BEGIN:VEVENT/g) || []).length, 250);
+    assert.deepEqual(listCalls.map((call) => call.cursor || null), [null, "200"]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS import derives per-event idempotency keys and reports partial failures", async () => {
+  const setup = await createFixture({ createEventFailureTitle: "Import two" });
+  try {
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "BEGIN:VEVENT",
+      "UID:api-import-1",
+      "SUMMARY:Import one",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:api-import-2",
+      "SUMMARY:Import two",
+      "DTSTART:20260409T110000Z",
+      "DTEND:20260409T120000Z",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n");
+
+    const imported = await apiRequest(setup, "POST", "/v1/events/ics", { ics }, { idempotencyKey: "ics-retry" });
+    assert.equal(imported.status, 502);
+    assert.equal(imported.body.error.code, "ICS_IMPORT_PARTIAL_FAILURE");
+    assert.equal(imported.body.error.details.imported, 1);
+    assert.equal(imported.body.error.details.failedIndex, 1);
+    assert.deepEqual(imported.body.error.details.importedEventIds, ["evt-1"]);
+    assert.deepEqual(setup.proton.mutationCalls().map((call) => call.idempotencyKey), ["ics-retry:0", "ics-retry:1"]);
+
+    const listed = await apiRequest(
+      setup,
+      "GET",
+      "/v1/events?start=2026-04-09T00:00:00.000Z&end=2026-04-10T00:00:00.000Z"
+    );
+    assert.equal(listed.status, 200);
+    assert.deepEqual(listed.body.data.events.map((event) => event.title), ["Import one"]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS import rejects unsupported VEVENT properties before mutations", async () => {
+  const mutationCalls = [];
+  const setup = await createFixture({ mutationCalls });
+  try {
+    const response = await apiRequest(setup, "POST", "/v1/events/ics", {
+      ics: "BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:bad\nSUMMARY:Bad\nDTSTART:20260409T090000Z\nDTEND:20260409T100000Z\nATTENDEE:mailto:a@example.test\nEND:VEVENT\nEND:VCALENDAR\n",
+    });
+    assert.equal(response.status, 422);
+    assert.equal(response.body.error.code, "ICS_UNSUPPORTED_PROPERTY");
+    assert.deepEqual(mutationCalls, []);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS import preflights service validation before mutations", async () => {
+  const mutationCalls = [];
+  const setup = await createFixture({ mutationCalls });
+  try {
+    const ics = [
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "BEGIN:VEVENT",
+      "UID:first",
+      "SUMMARY:First valid",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "END:VEVENT",
+      "BEGIN:VEVENT",
+      "UID:bad-range",
+      "SUMMARY:Bad range",
+      "DTSTART:20260409T120000Z",
+      "DTEND:20260409T110000Z",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\r\n");
+    const response = await apiRequest(setup, "POST", "/v1/events/ics", { ics });
+    assert.equal(response.status, 400);
+    assert.equal(response.body.error.code, "INVALID_TIME_RANGE");
+    assert.deepEqual(mutationCalls, []);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS import enforces raw size limit before mutations", async () => {
+  const mutationCalls = [];
+  const setup = await createFixture({ mutationCalls });
+  try {
+    const response = await fetch(`${setup.api.baseUrl}/v1/events/ics`, {
+      method: "POST",
+      headers: {
+        Authorization: "Bearer test-token",
+        "Content-Type": "text/calendar",
+      },
+      body: "x".repeat(10 * 1024 * 1024 + 1),
+    });
+    const body = await response.json();
+    assert.equal(response.status, 413);
+    assert.equal(body.error.code, "ICS_IMPORT_TOO_LARGE");
+    assert.deepEqual(mutationCalls, []);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("ICS import enforces local mutation event limit before mutations", async () => {
+  const mutationCalls = [];
+  const setup = await createFixture({ mutationCalls });
+  try {
+    const vevents = Array.from({ length: 51 }, (_, index) => [
+      "BEGIN:VEVENT",
+      `UID:${index}`,
+      "SUMMARY:x",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "END:VEVENT",
+    ].join("\n"));
+    const response = await apiRequest(setup, "POST", "/v1/events/ics", {
+      ics: ["BEGIN:VCALENDAR", ...vevents, "END:VCALENDAR", ""].join("\n"),
+    });
+    assert.equal(response.status, 413);
+    assert.equal(response.body.error.code, "ICS_IMPORT_BATCH_TOO_LARGE");
+    assert.deepEqual(mutationCalls, []);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("enforces hard target lock even with calendar routes", async () => {
   const setup = await createFixture({
     targetCalendarId: "assistant-calendar",
@@ -1604,7 +1810,9 @@ async function createFixture(options = {}) {
     baseUrl: protonBaseUrl,
     calendarIds,
     authStatusError: options.authStatusError,
+    createEventFailureTitle: options.createEventFailureTitle,
     mutationCalls: options.mutationCalls,
+    listCalls: options.listCalls,
   });
 
   const initialSessionCookie = options.initialSessionCookie || proton.validSessionCookie;
@@ -1701,6 +1909,7 @@ function createMockProtonClient(options) {
   const primaryCalendarId = calendarIds[0];
 
   const calendarStores = new Map();
+  const mutationCalls = [];
   for (const calendarId of calendarIds) {
     calendarStores.set(calendarId, new Map());
   }
@@ -1725,6 +1934,11 @@ function createMockProtonClient(options) {
   }
 
   function recordMutation(operation, input) {
+    mutationCalls.push({
+      operation,
+      calendarId: input.calendarId,
+      idempotencyKey: input.idempotencyKey,
+    });
     if (!options.mutationCalls) {
       return;
     }
@@ -1736,6 +1950,10 @@ function createMockProtonClient(options) {
   }
 
   const client = {
+    mutationCalls() {
+      return mutationCalls.map((call) => ({ ...call }));
+    },
+
     async authStatus() {
       if (options.authStatusError) {
         throw options.authStatusError;
@@ -1756,6 +1974,7 @@ function createMockProtonClient(options) {
 
     async listEvents({ calendarId, limit, cursor }) {
       await assertAuthorized();
+      options.listCalls?.push({ calendarId, limit, cursor });
       const store = readCalendarStore(calendarId);
       const offset = Number(cursor || "0");
       const all = [...store.values()].sort((a, b) => Date.parse(a.start) - Date.parse(b.start));
@@ -1784,6 +2003,9 @@ function createMockProtonClient(options) {
       const { calendarId, event } = input;
       recordMutation("create", input);
       await assertAuthorized();
+      if (event.title === options.createEventFailureTitle) {
+        throw new ApiError(502, "UPSTREAM_ERROR", "forced create failure");
+      }
       const store = readCalendarStore(calendarId);
       const now = new Date().toISOString();
       const id = `evt-${nextId}`;
@@ -1966,6 +2188,7 @@ function createMockProtonClient(options) {
     validSessionCookie,
     baseUrl,
     client,
+    mutationCalls: client.mutationCalls,
   };
 }
 

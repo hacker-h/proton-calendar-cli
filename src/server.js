@@ -5,6 +5,7 @@ import { ApiError, isApiError, toErrorPayload } from "./errors.js";
 import { ProtonCalendarClient } from "./proton/proton-client.js";
 import { CalendarService } from "./service/calendar-service.js";
 import { CookieSessionStore } from "./session/cookie-session-store.js";
+import { MAX_ICS_EXPORT_EVENTS, MAX_ICS_IMPORT_BYTES, assertLocalIcsImportEventLimit, exportEventsToIcs, parseIcsEvents } from "./ics.js";
 
 export function createApiServer(config, options = {}) {
   assertConfig(config);
@@ -51,6 +52,12 @@ export function createApiServer(config, options = {}) {
       res.setHeader("X-Request-Id", requestId);
       res.end(`${JSON.stringify(payload)}\n`);
     };
+    const sendText = (status, contentType, text) => {
+      res.statusCode = status;
+      res.setHeader("Content-Type", contentType);
+      res.setHeader("X-Request-Id", requestId);
+      res.end(text);
+    };
 
     try {
       const method = req.method || "GET";
@@ -75,6 +82,51 @@ export function createApiServer(config, options = {}) {
 
       if (method === "GET" && url.pathname === "/v1/calendars") {
         send(200, { data: await service.listCalendars() });
+        return;
+      }
+
+      const icsRoute = parseIcsRoute(url.pathname);
+
+      if (icsRoute && method === "GET") {
+        const events = await listAllEventsForIcsExport(service, {
+          start: url.searchParams.get("start"),
+          end: url.searchParams.get("end"),
+        }, {
+          calendarId: icsRoute.calendarId,
+        });
+        sendText(200, "text/calendar; charset=utf-8", exportEventsToIcs(events));
+        return;
+      }
+
+      if (icsRoute && method === "POST") {
+        const ics = await readIcsBody(req);
+        const parsed = parseIcsEvents(ics);
+        assertLocalIcsImportEventLimit(parsed.count);
+        service.validateCreateEvents(parsed.events, { calendarId: icsRoute.calendarId });
+        const events = [];
+        for (let index = 0; index < parsed.events.length; index += 1) {
+          try {
+            events.push(await service.createEvent(parsed.events[index], deriveImportIdempotencyKey(req.headers["x-idempotency-key"], index), {
+              calendarId: icsRoute.calendarId,
+            }));
+          } catch (error) {
+            if (events.length === 0) {
+              throw error;
+            }
+            throw new ApiError(502, "ICS_IMPORT_PARTIAL_FAILURE", "ICS import stopped after creating some events; manual cleanup may be required", {
+              imported: events.length,
+              failedIndex: index,
+              importedEventIds: events.map((event) => event.id),
+              causeCode: isApiError(error) ? error.code : undefined,
+            });
+          }
+        }
+        send(201, {
+          data: {
+            imported: events.length,
+            events,
+          },
+        });
         return;
       }
 
@@ -256,14 +308,38 @@ function parseEventRoute(pathname) {
   return null;
 }
 
-async function readJsonBody(req) {
-  let raw = "";
-  for await (const chunk of req) {
-    raw += chunk.toString();
-    if (raw.length > 1024 * 1024) {
-      throw new ApiError(413, "PAYLOAD_TOO_LARGE", "Request body too large");
-    }
+function parseIcsRoute(pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+
+  if (parts.length === 3 && parts[0] === "v1" && parts[1] === "events" && parts[2] === "ics") {
+    return { calendarId: null };
   }
+
+  if (parts.length === 4 && parts[0] === "v1" && parts[1] === "calendars" && parts[3] === "ics") {
+    return { calendarId: decodeURIComponent(parts[2]) };
+  }
+
+  return null;
+}
+
+function deriveImportIdempotencyKey(value, index) {
+  const raw = Array.isArray(value) ? value[0] : value;
+  const key = String(raw || "").trim();
+  return key ? `${key}:${index}` : undefined;
+}
+
+async function listAllEventsForIcsExport(service, input, options) {
+  const listed = await service.listEventsForExport(input, options);
+  if (listed.events.length > MAX_ICS_EXPORT_EVENTS) {
+    throw new ApiError(422, "ICS_EXPORT_EVENT_LIMIT", "ICS export exceeded the 15000 event safety limit", {
+      maxEvents: MAX_ICS_EXPORT_EVENTS,
+    });
+  }
+  return listed.events;
+}
+
+async function readJsonBody(req) {
+  const raw = await readRawBody(req, 1024 * 1024);
 
   if (raw.trim().length === 0) {
     return {};
@@ -274,4 +350,35 @@ async function readJsonBody(req) {
   } catch {
     throw new ApiError(400, "INVALID_JSON", "Request body must be valid JSON");
   }
+}
+
+async function readIcsBody(req) {
+  const raw = await readRawBody(req, MAX_ICS_IMPORT_BYTES + 1024);
+  const contentType = String(req.headers["content-type"] || "").toLowerCase();
+  if (contentType.includes("text/calendar") || contentType.includes("text/plain")) {
+    return raw;
+  }
+  if (raw.trim().length === 0) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "ICS import body is required");
+  }
+  try {
+    const parsed = JSON.parse(raw);
+    if (!parsed || typeof parsed !== "object" || typeof parsed.ics !== "string") {
+      throw new Error("invalid payload");
+    }
+    return parsed.ics;
+  } catch {
+    throw new ApiError(400, "INVALID_JSON", "ICS import JSON body must contain an ics string");
+  }
+}
+
+async function readRawBody(req, maxBytes) {
+  let raw = "";
+  for await (const chunk of req) {
+    raw += chunk.toString();
+    if (Buffer.byteLength(raw, "utf8") > maxBytes) {
+      throw new ApiError(413, "PAYLOAD_TOO_LARGE", "Request body too large");
+    }
+  }
+  return raw;
 }

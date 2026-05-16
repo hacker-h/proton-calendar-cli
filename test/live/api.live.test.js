@@ -121,6 +121,51 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(invalid.body.error.code, "INVALID_NOTIFICATIONS");
     });
 
+    await t.test("ICS import and export round trip through API", async () => {
+      const title = buildEventTitle(config, "ics-api-import");
+      const route = config.calendarId
+        ? `/v1/calendars/${encodeURIComponent(config.calendarId)}/ics`
+        : "/v1/events/ics";
+      const importResponse = await fetch(`${config.apiBaseUrl}${route}`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          Accept: "application/json",
+          "Content-Type": "text/calendar; charset=utf-8",
+        },
+        body: [
+          "BEGIN:VCALENDAR",
+          "VERSION:2.0",
+          "BEGIN:VEVENT",
+          "UID:live-api-import@example.test",
+          `SUMMARY:${title}`,
+          "DESCRIPTION:live api ics import",
+          "LOCATION:ICS API",
+          "DTSTART:20260308T100000Z",
+          "DTEND:20260308T103000Z",
+          "END:VEVENT",
+          "END:VCALENDAR",
+          "",
+        ].join("\r\n"),
+      });
+      const imported = await importResponse.json();
+      assert.equal(importResponse.status, 201);
+      assert.equal(imported.data.imported, 1);
+      assert.equal(imported.data.events[0].title, title);
+
+      const exportResponse = await fetch(`${config.apiBaseUrl}${route}?start=2026-03-08T00%3A00%3A00.000Z&end=2026-03-09T00%3A00%3A00.000Z`, {
+        headers: {
+          Authorization: `Bearer ${config.apiToken}`,
+          Accept: "text/calendar",
+        },
+      });
+      const exported = await exportResponse.text();
+      assert.equal(exportResponse.status, 200);
+      assert.match(exported, /BEGIN:VCALENDAR/);
+      assert.match(exported, new RegExp(escapeRegExp(title)));
+      assert.equal(exported.includes(config.apiToken), false);
+    });
+
     await t.test("notifications create preserve and clear through API mutations", async () => {
       const title = buildEventTitle(config, "notifications-api");
       const notifications = [{ Type: 1, Trigger: "-PT10M" }];
@@ -582,4 +627,8 @@ function liveTitles(events, prefix) {
     .filter((event) => String(event.title || "").startsWith(prefix))
     .map((event) => event.title)
     .sort();
+}
+
+function escapeRegExp(value) {
+  return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 }

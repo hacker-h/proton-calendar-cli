@@ -2353,6 +2353,127 @@ test("loads API token/base URL from local config file", async () => {
   assert.equal(requests[0].init.headers.Authorization, "Bearer file-token");
 });
 
+test("export command requires explicit range and writes text/calendar", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["export", "--from", "2026-07-01", "--to", "2026-07-31", "--calendar", "cal-1"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return textResponse(200, "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
+    },
+    stdout,
+    stderr,
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(stderr.value(), "");
+  assert.equal(stdout.value(), "BEGIN:VCALENDAR\r\nEND:VCALENDAR\r\n");
+  assert.equal(requests[0].url.pathname, "/v1/calendars/cal-1/ics");
+  assert.equal(requests[0].url.searchParams.get("start"), "2026-07-01T00:00:00.000Z");
+  assert.equal(requests[0].url.searchParams.get("end"), "2026-08-01T00:00:00.000Z");
+  assert.equal(requests[0].init.headers.Accept, "text/calendar");
+});
+
+test("export command rejects broad implicit scans", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+  const exitCode = await runPcCli(["export"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      apiCalled = true;
+      return textResponse(200, "");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+});
+
+test("export command rejects impossible date-only bounds", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+  const exitCode = await runPcCli(["export", "--from", "2026-02-31", "--to", "2026-03-02"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      apiCalled = true;
+      return textResponse(200, "");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+});
+
+test("import command posts local ICS file as text/calendar", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-ics-import-test-"));
+  const icsPath = path.join(tmpDir, "calendar.ics");
+  await writeFile(icsPath, "BEGIN:VCALENDAR\nEND:VCALENDAR\n");
+
+  const requests = [];
+  const stdout = createWriter();
+  const exitCode = await runPcCli(["import", "--calendar", "cal-1", icsPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(201, { data: { imported: 0, events: [] } });
+    },
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/calendars/cal-1/ics");
+  assert.equal(requests[0].init.headers["Content-Type"], "text/calendar; charset=utf-8");
+  assert.match(requests[0].init.headers["X-Idempotency-Key"], /^ics-import-[a-f0-9]{32}$/);
+  assert.equal(requests[0].init.body, "BEGIN:VCALENDAR\nEND:VCALENDAR\n");
+  assert.deepEqual(JSON.parse(stdout.value()).data, { imported: 0, events: [] });
+});
+
+test("import command enforces 10 MB file limit before API call", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-ics-limit-test-"));
+  const icsPath = path.join(tmpDir, "large.ics");
+  await writeFile(icsPath, "x".repeat(10 * 1024 * 1024 + 1));
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(["import", icsPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      apiCalled = true;
+      return jsonResponse(201, { data: {} });
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "ICS_IMPORT_TOO_LARGE");
+});
+
 test("entrypoint loads local .env without overriding shell env", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-dotenv-test-"));
   await writeFile(
@@ -2545,6 +2666,30 @@ test("CLI error output sanitizes raw upstream payload details", async () => {
   assert.equal(serialized.includes("REFRESH-secret"), false);
   assert.equal(serialized.includes("auth-secret"), false);
   assert.equal(serialized.includes("payload"), false);
+});
+
+test("partial ICS import failures use upstream exit code", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-partial-import-test-"));
+  const icsPath = path.join(tmpDir, "calendar.ics");
+  await writeFile(icsPath, "BEGIN:VCALENDAR\nEND:VCALENDAR\n");
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["import", icsPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => jsonResponse(502, {
+      error: {
+        code: "ICS_IMPORT_PARTIAL_FAILURE",
+        message: "ICS import stopped after creating some events; manual cleanup may be required",
+      },
+    }),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 5);
+  assert.equal(JSON.parse(stderr.value()).error.code, "ICS_IMPORT_PARTIAL_FAILURE");
 });
 
 test("unexpected CLI failures keep the general failure exit code", async () => {
