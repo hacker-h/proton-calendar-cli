@@ -2,6 +2,14 @@ import { DEFAULT_TIMEOUT_MS } from "./constants.js";
 import { CliError } from "./errors.js";
 
 export async function requestJson(fetchImpl, request) {
+  return requestApi(fetchImpl, request, "json");
+}
+
+export async function requestText(fetchImpl, request) {
+  return requestApi(fetchImpl, request, "text");
+}
+
+async function requestApi(fetchImpl, request, responseType) {
   const url = new URL(`${request.apiBaseUrl}${request.path}`);
   for (const [key, value] of Object.entries(request.query || {})) {
     if (value === undefined || value === null || value === "") {
@@ -11,11 +19,14 @@ export async function requestJson(fetchImpl, request) {
   }
 
   const headers = {
-    Accept: "application/json",
+    Accept: request.accept || "application/json",
     Authorization: `Bearer ${request.apiToken}`,
   };
+  if (request.idempotencyKey) {
+    headers["X-Idempotency-Key"] = request.idempotencyKey;
+  }
   if (request.body !== undefined) {
-    headers["Content-Type"] = "application/json";
+    headers["Content-Type"] = request.contentType || "application/json";
   }
 
   let response;
@@ -23,7 +34,11 @@ export async function requestJson(fetchImpl, request) {
     response = await fetchImpl(url, {
       method: request.method,
       headers,
-      body: request.body === undefined ? undefined : JSON.stringify(request.body),
+      body: request.body === undefined
+        ? undefined
+        : request.contentType && request.contentType !== "application/json"
+          ? String(request.body)
+          : JSON.stringify(request.body),
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     });
   } catch (error) {
@@ -44,7 +59,7 @@ export async function requestJson(fetchImpl, request) {
     );
   }
 
-  return payload;
+  return responseType === "text" ? text : payload;
 }
 
 export function parseMaybeJson(text) {

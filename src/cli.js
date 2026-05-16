@@ -14,6 +14,7 @@ import { runDoctorCommand } from "./cli/commands/doctor-command.js";
 import { runLoginCommand } from "./cli/commands/login-command.js";
 import { runLogoutCommand } from "./cli/commands/logout-command.js";
 import { runUpdateCommand } from "./cli/commands/update-command.js";
+import { runIcsExportCommand, runIcsImportCommand } from "./cli/commands/ics-command.js";
 
 export async function runPcCli(argv, options = {}) {
   const fetchImpl = options.fetchImpl || fetch;
@@ -103,6 +104,18 @@ export async function runPcCli(argv, options = {}) {
       return 0;
     }
 
+    if (apiCommand === "export") {
+      const ics = await runIcsExportCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
+      write(stdout, ics);
+      return 0;
+    }
+
+    if (apiCommand === "import") {
+      const result = await runIcsImportCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
+      writeOutput(stdout, result.output, result.payload);
+      return 0;
+    }
+
     if (apiCommand === "create") {
       const result = await runCreateCommand(rest, { apiBaseUrl, apiToken, fetchImpl });
       writeOutput(stdout, result.output, result.payload);
@@ -142,6 +155,12 @@ function normalizeApiCommand(command) {
   }
   if (command === "calendars") {
     return "calendars";
+  }
+  if (command === "export") {
+    return "export";
+  }
+  if (command === "import") {
+    return "import";
   }
   return null;
 }
