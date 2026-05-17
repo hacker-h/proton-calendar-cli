@@ -1,3 +1,12 @@
+# [1.15.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.14.1...v1.15.0) (2026-05-17)
+
+
+### Features
+
+* **api:** block read-only calendar mutations ([3bc5639](https://github.com/hacker-h/proton-calendar-cli/commit/3bc5639a95df6600febf84892744e4f67d0358d6))
+* **cli:** reject read-only default calendars ([5acb62d](https://github.com/hacker-h/proton-calendar-cli/commit/5acb62d88932084f09116d6beb3a654befd83161))
+* **proton:** surface special calendar metadata ([63e4da7](https://github.com/hacker-h/proton-calendar-cli/commit/63e4da745cc164e9d07d36225217441196bf0dcc))
+
 ## [1.14.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.14.0...v1.14.1) (2026-05-17)
 
 
