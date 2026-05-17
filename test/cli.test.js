@@ -1840,6 +1840,78 @@ test("edit fails when no patch fields are provided", async () => {
   assert.equal(payload.error.code, "EMPTY_PATCH");
 });
 
+test("edit accepts event ids that begin with a dash", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(["edit", "-evt-live", "title=Dash id"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, {
+        data: {
+          id: "-evt-live",
+          title: "Dash id",
+        },
+      });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/events/-evt-live");
+});
+
+test("edit rejects option-shaped missing event ids", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(["edit", "--dry-run", "title=Dash id"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      apiCalled = true;
+      throw new Error("should not call API");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+});
+
+test("edit supports separator before option-shaped event ids", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(["edit", "--", "--evt-live", "title=Dash id"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, {
+        data: {
+          id: "--evt-live",
+          title: "Dash id",
+        },
+      });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/events/--evt-live");
+});
+
 test("rm sends delete with scope", async () => {
   const requests = [];
 
@@ -1864,6 +1936,53 @@ test("rm sends delete with scope", async () => {
   assert.equal(requests.length, 1);
   assert.equal(requests[0].init.method, "DELETE");
   assert.equal(requests[0].url.searchParams.get("scope"), "series");
+});
+
+test("rm accepts event ids that begin with a dash", async () => {
+  const requests = [];
+
+  const exitCode = await runPcCli(["rm", "-evt-live", "--scope", "series"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, {
+        data: {
+          deleted: true,
+        },
+      });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/events/-evt-live");
+  assert.equal(requests[0].init.method, "DELETE");
+});
+
+test("rm rejects option-shaped missing event ids", async () => {
+  const stderr = createWriter();
+  let apiCalled = false;
+
+  const exitCode = await runPcCli(["rm", "--scope", "series"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => {
+      apiCalled = true;
+      throw new Error("should not call API");
+    },
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(apiCalled, false);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
 });
 
 test("help works with leading -- separator", async () => {

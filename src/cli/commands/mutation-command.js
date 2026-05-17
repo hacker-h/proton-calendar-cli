@@ -6,6 +6,8 @@ import { validateStartBeforeEnd } from "../date-range.js";
 import { CliError } from "../errors.js";
 import { normalizeFriendlyReminderFields } from "../../reminders.js";
 
+const OPTION_SHAPED_EVENT_ID_TOKENS = new Set(["-o", "-c"]);
+
 export async function runCreateCommand(args, context) {
   const parsed = await parseMutationArgs(args, { requireEventId: false });
 
@@ -131,11 +133,9 @@ async function parseMutationArgs(args, options = {}) {
 
   let index = 0;
   if (requireEventId) {
-    if (!args[0] || args[0].startsWith("-")) {
-      throw new CliError("INVALID_ARGS", "eventId is required");
-    }
-    state.eventId = args[0];
-    index = 1;
+    const parsedEventId = readLeadingEventId(args);
+    state.eventId = parsedEventId.eventId;
+    index = parsedEventId.nextIndex;
   }
 
   for (let i = index; i < args.length; i += 1) {
@@ -234,19 +234,17 @@ function buildDryRunPayload(operation, method, path, query, payload) {
 }
 
 function parseDeleteArgs(args) {
-  if (!args[0] || args[0].startsWith("-")) {
-    throw new CliError("INVALID_ARGS", "eventId is required");
-  }
+  const parsedEventId = readLeadingEventId(args);
 
   const state = {
-    eventId: args[0],
+    eventId: parsedEventId.eventId,
     output: "json",
     calendarId: null,
     scope: null,
     occurrenceStart: null,
   };
 
-  for (let i = 1; i < args.length; i += 1) {
+  for (let i = parsedEventId.nextIndex; i < args.length; i += 1) {
     const token = args[i];
     if (token === "-o" || token === "--output") {
       state.output = requireValue(args, ++i, token);
@@ -278,6 +276,20 @@ function parseDeleteArgs(args) {
     scope: state.scope,
     occurrenceStart: state.occurrenceStart,
   };
+}
+
+
+function readLeadingEventId(args) {
+  if (args[0] === "--") {
+    if (!args[1]) {
+      throw new CliError("INVALID_ARGS", "eventId is required");
+    }
+    return { eventId: args[1], nextIndex: 2 };
+  }
+  if (!args[0] || args[0].startsWith("--") || OPTION_SHAPED_EVENT_ID_TOKENS.has(args[0])) {
+    throw new CliError("INVALID_ARGS", "eventId is required");
+  }
+  return { eventId: args[0], nextIndex: 1 };
 }
 
 
