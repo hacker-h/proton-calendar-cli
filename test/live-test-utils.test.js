@@ -72,6 +72,18 @@ test("readLiveCapabilities enables second account only when gate and credentials
   assert.equal(withGate.attendeeEmail, "second@example.com");
 });
 
+test("invite live gate requires second-account bootstrap even with attendee override", () => {
+  const capabilities = readLiveCapabilities({
+    PROTON_LIVE_ENABLE_INVITES: "1",
+    PROTON_LIVE_ATTENDEE_EMAIL: "attendee@example.com",
+  });
+
+  assert.equal(capabilities.invitesRequested, true);
+  assert.equal(capabilities.secondAccount, false);
+  assert.equal(capabilities.invites, false);
+  assert.equal(capabilities.attendeeEmail, "attendee@example.com");
+});
+
 test("skipUnlessCapability explains disabled or misconfigured gates", () => {
   const config = readLiveConfig({
     PC_API_TOKEN: "token",

@@ -183,6 +183,33 @@ test("rejects unsupported metadata passthrough fields by name", () => {
   );
 });
 
+test("rejects inbound invitation ICS before import mutations", () => {
+  assert.throws(
+    () => parseIcsEvents([
+      "BEGIN:VCALENDAR",
+      "VERSION:2.0",
+      "METHOD:REQUEST",
+      "BEGIN:VEVENT",
+      "UID:invite-1",
+      "SUMMARY:Inbound invite",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "ORGANIZER;CN=Owner:mailto:owner@example.test",
+      "ATTENDEE;PARTSTAT=NEEDS-ACTION;RSVP=TRUE:mailto:person@example.test",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\n")),
+    {
+      code: "ICS_UNSUPPORTED_PROPERTY",
+      details: {
+        eventIndex: 0,
+        properties: ["ATTENDEE", "ORGANIZER"],
+      },
+    }
+  );
+});
+
 test("rejects impossible ICS dates before import", () => {
   assert.throws(
     () => parseIcsEvents("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:1\nSUMMARY:x\nDTSTART:20260231T090000Z\nDTEND:20260231T100000Z\nEND:VEVENT\nEND:VCALENDAR\n"),
