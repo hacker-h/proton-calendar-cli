@@ -36,6 +36,14 @@ test("CI requires live Proton canary for trusted runs", async () => {
   assert.match(workflow, /PROTON_LIVE_ENABLE_SECOND_ACCOUNT/);
   assert.match(workflow, /PROTON_LIVE_ENABLE_INVITES/);
   assert.match(workflow, /PROTON_LIVE_ENABLE_SHARING/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_CONFERENCING_METADATA/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_PROTON_MEET/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_ZOOM/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_AVAILABILITY/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_APPOINTMENT_SCHEDULING/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_SUBSCRIBED_CALENDARS/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_HOLIDAY_CALENDARS/);
+  assert.match(workflow, /PROTON_LIVE_ENABLE_BIRTHDAY_CALENDARS/);
   assert.doesNotMatch(workflow, /steps\.live-secrets/);
 });
 
