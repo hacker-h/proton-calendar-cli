@@ -12,6 +12,7 @@ const DEFAULT_ENV_PATH = "secrets/ci-live.env";
 const DEFAULT_TRIAGE_PATH = "reports/live-triage.json";
 const DEFAULT_DRIFT_BASELINE_PATH = "test/fixtures/live-drift-baseline.json";
 const DEFAULT_DRIFT_REPORT_PATH = "reports/live-drift.json";
+const DEFAULT_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH = "secrets/proton-cookies-second.json";
 const DEFAULT_API_BASE_URL = "http://127.0.0.1:8787";
 const DEFAULT_HEALTH_TIMEOUT_MS = 45000;
 
@@ -55,6 +56,10 @@ export async function main(env = process.env) {
 
   await runStage("browser-install", () => runCommand(pnpmCommand(), ["exec", "playwright", "install", "chromium", "--with-deps"], { env: runEnv }));
   await runStage("bootstrap", () => runCommand(process.execPath, ["scripts/ci/bootstrap-proton-session.mjs"], { env: runEnv }));
+  if (shouldBootstrapSecondAccount(runEnv)) {
+    runEnv.PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH = resolveSecondAccountCookieBundlePath(runEnv);
+    await runStage("bootstrap-second-account", () => runCommand(process.execPath, ["scripts/ci/bootstrap-proton-session.mjs"], { env: buildSecondAccountBootstrapEnv(runEnv) }));
+  }
   await runStage("write-live-env", () => runCommand(process.execPath, ["scripts/ci/write-live-env.mjs"], { env: runEnv }));
 
   const liveEnv = {
@@ -99,10 +104,31 @@ export async function prepareLiveCanaryEnv(env = process.env) {
   return prepared;
 }
 
+export function shouldBootstrapSecondAccount(env = process.env) {
+  return readBooleanFlag(env.PROTON_LIVE_ENABLE_SECOND_ACCOUNT)
+    && Boolean(String(env.PROTON_USERNAME2 || "").trim())
+    && Boolean(String(env.PROTON_PASSWORD2 || "").trim());
+}
+
+export function buildSecondAccountBootstrapEnv(env = process.env) {
+  return {
+    ...env,
+    PROTON_USERNAME: String(env.PROTON_USERNAME2 || "").trim(),
+    PROTON_PASSWORD: String(env.PROTON_PASSWORD2 || ""),
+    COOKIE_BUNDLE_PATH: resolveSecondAccountCookieBundlePath(env),
+  };
+}
+
+function resolveSecondAccountCookieBundlePath(env = process.env) {
+  return String(env.PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH || DEFAULT_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH).trim()
+    || DEFAULT_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH;
+}
+
 export function classifyLiveCanaryFailure(error, options = {}) {
   const stage = error?.stage || "unknown";
-  const bootstrapCode = stage === "bootstrap" ? Number(error?.exitCode) : Number.NaN;
-  const mapped = Number.isFinite(bootstrapCode) ? classifyBootstrapExitCode(bootstrapCode) : classifyStage(stage);
+  const bootstrapStage = stage === "bootstrap" || stage === "bootstrap-second-account";
+  const bootstrapCode = bootstrapStage ? Number(error?.exitCode) : Number.NaN;
+  const mapped = Number.isFinite(bootstrapCode) ? classifyBootstrapExitCode(bootstrapCode, { secondAccount: stage === "bootstrap-second-account" }) : classifyStage(stage);
   const quarantine = options.quarantine || { active: [], invalid: [] };
   const quarantineMatches = quarantine.active.filter((entry) => matchesQuarantine(entry, mapped));
 
@@ -506,6 +532,10 @@ function readPositiveNumber(value, fallback) {
   return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
 }
 
+function readBooleanFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
+}
+
 function findAvailableLoopbackPort() {
   return new Promise((resolve, reject) => {
     const server = createServer();
@@ -558,12 +588,13 @@ async function writeLiveTriageReport(triage, env) {
   await writeFile(reportPath, `${JSON.stringify({ data: triage }, null, 2)}\n`, { mode: 0o600 });
 }
 
-function classifyBootstrapExitCode(exitCode) {
+function classifyBootstrapExitCode(exitCode, options = {}) {
+  const accountLabel = options.secondAccount ? "second Proton live canary" : "dedicated Proton live canary";
   const map = {
-    10: ["credential_config", "bootstrap", "proton-login-config", "Configure PROTON_USERNAME and PROTON_PASSWORD as protected live canary secrets.", false],
+    10: ["credential_config", "bootstrap", "proton-login-config", `Configure the protected ${accountLabel} secrets.`, false],
     20: ["runner_browser", "bootstrap", "browser-setup", "Check Playwright/Chromium installation and runner browser dependencies.", true],
     30: ["runner_or_proton_availability", "bootstrap", "proton-login", "Check runner network and Proton availability before retrying.", true],
-    40: ["credential_auth", "bootstrap", "proton-login", "Rotate or repair the dedicated Proton live canary credentials.", false],
+    40: ["credential_auth", "bootstrap", "proton-login", `Rotate or repair the ${accountLabel} credentials.`, false],
     50: ["credential_auth_human_required", "bootstrap", "proton-login", "Human intervention is required; do not loop browser logins.", false],
     60: ["proton_ui_drift", "bootstrap", "proton-login", "Inspect sanitized bootstrap logs and update Proton login selectors if needed.", true],
     70: ["credential_or_proton_session_drift", "bootstrap", "calendar-session", "Check session export and Proton calendar auth shape.", true],

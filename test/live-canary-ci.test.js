@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFile } from "node:child_process";
-import { mkdtemp, readFile, writeFile } from "node:fs/promises";
+import { mkdtemp, readFile, stat, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
@@ -9,11 +9,13 @@ import {
   assertSafeLiveDriftReport,
   buildDriftShape,
   buildLiveDriftReport,
+  buildSecondAccountBootstrapEnv,
   classifyLiveCanaryFailure,
   compareLiveDriftSnapshots,
   parseEnvFile,
   parseLiveQuarantine,
   prepareLiveCanaryEnv,
+  shouldBootstrapSecondAccount,
 } from "../scripts/ci/run-live-canary.mjs";
 
 const execFileAsync = promisify(execFile);
@@ -56,6 +58,33 @@ test("prepareLiveCanaryEnv uses an available loopback port unless explicitly con
   const remote = await prepareLiveCanaryEnv({ PC_API_BASE_URL: "https://example.invalid" });
   assert.equal(remote.PC_API_BASE_URL, "https://example.invalid");
   assert.equal(remote.PORT, undefined);
+});
+
+test("second-account bootstrap is opt-in and maps credentials to an isolated cookie bundle", () => {
+  assert.equal(shouldBootstrapSecondAccount({
+    PROTON_USERNAME2: "second@example.com",
+    PROTON_PASSWORD2: "second-password",
+  }), false);
+  assert.equal(shouldBootstrapSecondAccount({
+    PROTON_LIVE_ENABLE_SECOND_ACCOUNT: "1",
+    PROTON_USERNAME2: "second@example.com",
+  }), false);
+
+  const env = {
+    PROTON_USERNAME: "primary@example.com",
+    PROTON_PASSWORD: "primary-password",
+    PROTON_USERNAME2: "second@example.com",
+    PROTON_PASSWORD2: "second-password",
+    PROTON_LIVE_ENABLE_SECOND_ACCOUNT: "1",
+    PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH: "secrets/second.json",
+  };
+
+  assert.equal(shouldBootstrapSecondAccount(env), true);
+  const bootstrapEnv = buildSecondAccountBootstrapEnv(env);
+  assert.equal(bootstrapEnv.PROTON_USERNAME, "second@example.com");
+  assert.equal(bootstrapEnv.PROTON_PASSWORD, "second-password");
+  assert.equal(bootstrapEnv.COOKIE_BUNDLE_PATH, "secrets/second.json");
+  assert.equal(bootstrapEnv.PROTON_USERNAME2, "second@example.com");
 });
 
 test("parseLiveQuarantine requires owner reason and future expiry", () => {
@@ -180,6 +209,11 @@ test("classifyLiveCanaryFailure maps bootstrap exits, templates triage, and keep
   assert.equal(challenge.failureClass, "credential_auth_human_required");
   assert.equal(challenge.quarantineEligible, false);
   assert.deepEqual(challenge.quarantineMatches, []);
+
+  const secondConfig = classifyLiveCanaryFailure({ stage: "bootstrap-second-account", exitCode: 10 });
+  assert.equal(secondConfig.failureClass, "credential_config");
+  assert.equal(JSON.stringify(secondConfig).includes("PROTON_USERNAME2"), false);
+  assert.equal(JSON.stringify(secondConfig).includes("PROTON_PASSWORD2"), false);
 
   const liveTests = classifyLiveCanaryFailure({ stage: "live-tests", exitCode: 1 });
   assert.equal(liveTests.failureClass, "project_regression_or_proton_drift");
@@ -380,6 +414,48 @@ test("write-live-env creates runnable API and live-test environment", async () =
   assert.equal(values.API_BEARER_TOKEN, "token-123");
   assert.equal(values.PC_API_TOKEN, "token-123");
   assert.equal(values.PC_API_BASE_URL, "http://127.0.0.1:8787");
+});
+
+test("write-live-env records second-account cookie path without credential values", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "live-env-second-account-test-"));
+  const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
+  const secondCookieBundlePath = path.join(tmpDir, "proton-cookies-second.json");
+  const envPath = path.join(tmpDir, "ci-live.env");
+
+  await writeFile(
+    cookieBundlePath,
+    `${JSON.stringify({
+      authProbe: {
+        defaultCalendarId: "cal-default",
+        calendarIds: ["cal-default"],
+      },
+    }, null, 2)}\n`,
+    { mode: 0o600 }
+  );
+
+  await execFileAsync(process.execPath, ["scripts/ci/write-live-env.mjs"], {
+    env: {
+      ...process.env,
+      COOKIE_BUNDLE_PATH: cookieBundlePath,
+      PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH: secondCookieBundlePath,
+      CI_LIVE_ENV_PATH: envPath,
+      PROTON_TEST_CALENDAR_ID: "cal-default",
+      PROTON_LIVE_ENABLE_SECOND_ACCOUNT: "1",
+      PROTON_USERNAME2: "second@example.com",
+      PROTON_PASSWORD2: "second-password",
+    },
+  });
+
+  const raw = await readFile(envPath, "utf8");
+  const values = parseEnvFile(raw);
+  assert.equal(values.PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH, secondCookieBundlePath);
+  assert.equal(values.PROTON_LIVE_ENABLE_SECOND_ACCOUNT, "1");
+  assert.equal(raw.includes("second-password"), false);
+  assert.equal(raw.includes("second@example.com"), false);
+  assert.equal(raw.includes("PROTON_PASSWORD2"), false);
+  if (process.platform !== "win32") {
+    assert.equal((await stat(envPath)).mode & 0o777, 0o600);
+  }
 });
 
 test("write-live-env ignores stale configured calendar ids not discovered by bootstrap", async () => {

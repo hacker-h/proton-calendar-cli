@@ -7,6 +7,8 @@ import path from "node:path";
 const cookieBundleRelativePath = "secrets/proton-cookies.json";
 const cookieBundlePath = path.resolve(process.env.COOKIE_BUNDLE_PATH || cookieBundleRelativePath);
 const cookieBundleEnvPath = formatCookieBundleEnvPath(cookieBundlePath);
+const secondAccountCookieBundlePath = resolveSecondAccountCookieBundlePath(process.env);
+const secondAccountCookieBundleEnvPath = secondAccountCookieBundlePath ? formatCookieBundleEnvPath(secondAccountCookieBundlePath) : null;
 const outputPath = path.resolve(process.env.CI_LIVE_ENV_PATH || "secrets/ci-live.env");
 
 const bundle = JSON.parse(await readFile(cookieBundlePath, "utf8"));
@@ -44,6 +46,7 @@ const lines = [
   `PC_API_TOKEN=${quote(apiBearerToken)}`,
   `PC_API_BASE_URL=${quote(apiBaseUrl)}`,
   `PROTON_BASE_URL=${quote(protonBaseUrl)}`,
+  ...secondAccountEnvLines({ env: process.env, cookieBundlePath: secondAccountCookieBundleEnvPath }),
   "",
 ];
 
@@ -81,4 +84,25 @@ function quote(value) {
 function readApiBearerToken() {
   const configured = String(process.env.API_BEARER_TOKEN || "").trim();
   return configured || randomBytes(32).toString("base64url");
+}
+
+function secondAccountEnvLines({ env, cookieBundlePath }) {
+  if (!readBooleanFlag(env.PROTON_LIVE_ENABLE_SECOND_ACCOUNT) || !cookieBundlePath) {
+    return [];
+  }
+  return [
+    `PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH=${quote(cookieBundlePath)}`,
+    `PROTON_LIVE_ENABLE_SECOND_ACCOUNT=${quote("1")}`,
+  ];
+}
+
+function resolveSecondAccountCookieBundlePath(env) {
+  if (!readBooleanFlag(env.PROTON_LIVE_ENABLE_SECOND_ACCOUNT)) {
+    return null;
+  }
+  return path.resolve(String(env.PROTON_SECOND_ACCOUNT_COOKIE_BUNDLE_PATH || "secrets/proton-cookies-second.json").trim() || "secrets/proton-cookies-second.json");
+}
+
+function readBooleanFlag(value) {
+  return /^(1|true|yes|on)$/i.test(String(value || "").trim());
 }
