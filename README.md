@@ -126,6 +126,8 @@ Supported event fields:
 
 Friendly reminders compile to raw Proton notification objects before the API calls Proton: `reminder=10m` becomes `[{"Type":1,"Trigger":"-PT10M"}]`, and `reminders=10m,1h` becomes `[{"Type":1,"Trigger":"-PT10M"},{"Type":1,"Trigger":"-PT1H"}]`. Supported durations are positive integers with `m`, `h`, or `d`. Only default app reminders are supported in friendly syntax; channel-prefixed values such as `email:1h` are rejected because Proton rejected the generated Type 2 shape in live testing. Raw notification objects are still passed through to Proton, for example `notifications='[{"Type":1,"Trigger":"-PT10M"}]'`. Do not combine `reminder`/`reminders` with `notifications` in the same mutation. Use `notifications=null` or `pc edit --clear notifications` to clear event-specific reminders.
 
+Attendee invitations remain a research/prototype boundary, not a supported API or CLI feature. Public Proton shared calendar code models real invitations as organizer-mode iCalendar operations with `METHOD:REQUEST` for create/update and `METHOD:CANCEL` for cancellation; sync payloads need `SharedKeyPacket`, `SharedEventContent`, `AttendeesEventContent`, clear `Attendees` token/status rows, `Permissions`, and `IsOrganizer`. The repository includes a disabled pure builder in `src/proton/internal/invite-prototype.js` to keep that payload shape under tests without sending invitations. The production event path still omits `ORGANIZER` and `ATTENDEE` because Proton treats organizer-bearing events as invitations and may make them read-only or send notifications.
+
 For monthly recurrence, `byDay` supports weekdays such as `MO` and ordinal weekdays such as `+1MO`, `2TU`, and `-1FR` for every Monday, the first Monday, second Tuesday, and last Friday of each month. Combine `byDay` with `byMonthDay` to match dates such as Friday the 13th. Months without the requested ordinal weekday are skipped.
 For monthly `byMonthDay`, values past the end of a shorter month fall back to that month's last day, so a `31` rule emits Feb 28/29 and Apr 30 instead of silently skipping those months.
 
@@ -399,7 +401,7 @@ pnpm run release:dry-run
 - List pagination uses `nextCursor` for output continuation only; broad date ranges still fetch, decode, expand recurrences, and sort the whole requested range before slicing the returned page.
 - `recurrence.count` and `recurrence.until` cannot both be set.
 - Proton currently rejects `scope=following` deletes in live recurrence tests with an upstream `UPSTREAM_ERROR`; use `scope=single` or `scope=series` deletes until that private API behavior is confirmed.
-- Reminder controls support common friendly syntax and Proton-compatible `Notifications` objects directly; no attendee invitation flow, RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
+- Reminder controls support common friendly syntax and Proton-compatible `Notifications` objects directly; attendee invitation payload research is present only as a disabled non-sending prototype, with no RSVP state, conference metadata, attachments, categories/tags, or arbitrary ICS passthrough yet.
 - ICS import/export is limited to simple local events and recurrence rules already supported by this CLI; alarms, attendees, organizer/invite data, attachments, categories, and arbitrary passthrough fields are rejected.
 - Live tests require a Proton account and calendar suitable for automated cleanup.
 
