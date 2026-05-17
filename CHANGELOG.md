@@ -1,3 +1,10 @@
+## [1.14.1](https://github.com/hacker-h/proton-calendar-cli/compare/v1.14.0...v1.14.1) (2026-05-17)
+
+
+### Bug Fixes
+
+* accept dash-prefixed CLI event ids ([14900e6](https://github.com/hacker-h/proton-calendar-cli/commit/14900e6210bd7a186663c258674bad0cc5c746c0))
+
 # [1.14.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.13.0...v1.14.0) (2026-05-17)
 
 
