@@ -4,7 +4,7 @@ import { mkdtemp, writeFile } from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import { runPcCli } from "../../src/cli.js";
-import { buildEventTitle, cleanupEvents, readLiveConfig, waitForApi } from "./helpers/live-test-utils.js";
+import { buildEventTitle, cleanupEvents, readLiveConfig, skipUnlessCapability, waitForApi } from "./helpers/live-test-utils.js";
 
 const config = readLiveConfig();
 const RANGE_START = "2026-03-01T00:00:00.000Z";
@@ -27,6 +27,49 @@ test("live cli suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       const doctor = await runJsonCli(["doctor", "auth", "--cookie-bundle", process.env.COOKIE_BUNDLE_PATH || "secrets/proton-cookies.json"]);
       assert.equal(doctor.exitCode, 0);
       assert.equal(["access_valid", "refresh_recovered"].includes(doctor.payload.data.status), true);
+    });
+
+    await t.test("calendar settings read through CLI", async () => {
+      const userSettings = await runJsonCli(["calendars", "--settings"], env);
+      assert.equal(userSettings.exitCode, 0);
+      assert.equal(Object.hasOwn(userSettings.payload, "data"), true);
+
+      if (config.calendarId) {
+        const calendarSettings = await runJsonCli(["calendars", "--calendar", config.calendarId, "--settings"], env);
+        assert.equal(calendarSettings.exitCode, 0);
+        assert.equal(calendarSettings.payload.data.calendarId, config.calendarId);
+      }
+    });
+
+    await t.test("calendar settings mutation through CLI restores original", {
+      skip: skipUnlessCapability(config, "calendarCrud", { reason: "calendar CRUD live mutations require PROTON_LIVE_ENABLE_CALENDAR_CRUD=1" }),
+    }, async () => {
+      assert.ok(config.calendarId, "calendar CRUD live mutations require configured calendar id");
+      const originalUserSettings = await runJsonCli(["calendars", "--settings"], env);
+      const originalCalendarSettings = await runJsonCli(["calendars", "--calendar", config.calendarId, "--settings"], env);
+      const calendars = await runJsonCli(["calendars"], env);
+      const originalMetadata = calendars.payload.data.calendars.find((calendar) => calendar.id === config.calendarId);
+      assert.ok(originalMetadata);
+      try {
+        const settings = await runJsonCli(["calendars", "--calendar", config.calendarId, "--settings", "defaultDuration=60"], env);
+        assert.equal(settings.exitCode, 0);
+        const metadata = await runJsonCli([
+          "calendars",
+          "--calendar",
+          config.calendarId,
+          `name=${originalMetadata.name}`,
+          `description=${originalMetadata.description || ""}`,
+          `display=${originalMetadata.display ?? 1}`,
+          ...(originalMetadata.color ? [`color=${originalMetadata.color}`] : []),
+        ], env);
+        assert.equal(metadata.exitCode, 0);
+      } finally {
+        await restoreCliCalendarCrud(env, {
+          userSettings: originalUserSettings.payload.data,
+          calendarSettings: originalCalendarSettings.payload.data,
+          metadata: originalMetadata,
+        });
+      }
     });
 
     await t.test("timed UTC event supports create list edit clear and delete", () => testTimedUtcCrud(env));
@@ -734,4 +777,22 @@ function occurrenceStarts(events, title) {
     .filter((event) => event.title === title)
     .map((event) => event.occurrenceStart || event.start)
     .sort();
+}
+
+async function restoreCliCalendarCrud(env, original) {
+  if (original.userSettings?.defaultCalendarId) {
+    await runJsonCli(["calendars", "--settings", `defaultCalendarId=${original.userSettings.defaultCalendarId}`], env);
+  }
+  if (original.calendarSettings?.defaultDuration) {
+    await runJsonCli(["calendars", "--calendar", config.calendarId, "--settings", `defaultDuration=${original.calendarSettings.defaultDuration}`], env);
+  }
+  await runJsonCli([
+    "calendars",
+    "--calendar",
+    config.calendarId,
+    `name=${original.metadata.name}`,
+    `description=${original.metadata.description || ""}`,
+    `display=${original.metadata.display ?? 1}`,
+    ...(original.metadata.color ? [`color=${original.metadata.color}`] : []),
+  ], env);
 }
