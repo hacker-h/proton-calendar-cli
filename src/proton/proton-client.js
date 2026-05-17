@@ -72,6 +72,59 @@ export class ProtonCalendarClient {
     return calendars.map(normalizeCalendar).filter((calendar) => calendar.id);
   }
 
+  async getUserCalendarSettings() {
+    const uid = await this.#getUID();
+    const payload = await this.#requestJSON("GET", "/api/settings/calendar", { uid });
+    return normalizeUserCalendarSettings(payload);
+  }
+
+  async updateUserCalendarSettings(patch) {
+    const uid = await this.#getUID();
+    const current = await this.getUserCalendarSettings();
+    const payload = await this.#requestJSON("PUT", "/api/settings/calendar", {
+      uid,
+      body: buildUserCalendarSettingsBody(patch, current.raw),
+    });
+    return normalizeUserCalendarSettings(payload);
+  }
+
+  async getCalendarSettings(calendarId) {
+    const uid = await this.#getUID();
+    const payload = await this.#requestJSON("GET", `/api/calendar/v1/${encodeURIComponent(calendarId)}/settings`, { uid });
+    return normalizeCalendarSettings(calendarId, payload);
+  }
+
+  async updateCalendarSettings(calendarId, patch) {
+    const uid = await this.#getUID();
+    const current = await this.getCalendarSettings(calendarId);
+    const payload = await this.#requestJSON("PUT", `/api/calendar/v1/${encodeURIComponent(calendarId)}/settings`, {
+      uid,
+      body: buildCalendarSettingsBody(patch, current.raw),
+    });
+    return normalizeCalendarSettings(calendarId, payload);
+  }
+
+  async updateCalendarMetadata(calendarId, patch) {
+    const context = await this.#getContext(calendarId);
+    const body = buildCalendarMetadataBody(patch, context.member);
+    const payload = await this.#requestJSON(
+      "PUT",
+      `/api/calendar/v1/${encodeURIComponent(calendarId)}/members/${encodeURIComponent(context.memberId)}`,
+      {
+        uid: context.uid,
+        body,
+      }
+    );
+    const member = payload?.Member || payload?.Calendar || body;
+    if (this.cachedContext?.calendarId === calendarId && this.cachedContext.memberId === context.memberId) {
+      this.cachedContext = {
+        ...this.cachedContext,
+        member: cloneObject(member),
+      };
+    }
+    return normalizeCalendarMetadata(calendarId, { Member: member });
+  }
+
   async listEvents({ calendarId, start, end, limit, cursor }) {
     const uid = await this.#getUID();
     const startUnix = toUnix(start);
@@ -280,7 +333,7 @@ export class ProtonCalendarClient {
       uid: rawEvent.UID || null,
       sequence: decoded.sequence || 0,
       protected: rawEvent.IsOrganizer === 1,
-      notifications: normalizeProtonNotifications(rawEvent.Notifications),
+      notifications: normalizeEventNotifications(rawEvent.Notifications),
     };
   }
 
@@ -484,6 +537,7 @@ export class ProtonCalendarClient {
       calendarId,
       sessionGeneration,
       memberId: member.ID,
+      member: cloneObject(member),
       addressEmail: address.Email,
       addressPrivateKey,
       calendarPrivateKey,
@@ -736,12 +790,115 @@ export class ProtonCalendarClient {
 function normalizeCalendar(calendar) {
   const id = String(calendar?.ID || calendar?.CalendarID || "").trim();
   const name = String(calendar?.Name || calendar?.DisplayName || calendar?.Title || id).trim();
-  return {
+  const normalized = {
     id,
     name: name || id,
     color: calendar?.Color || null,
     permissions: calendar?.Permissions ?? null,
   };
+  if (calendar?.Description !== undefined) {
+    normalized.description = calendar.Description ? String(calendar.Description) : "";
+  }
+  if (calendar?.Display !== undefined) {
+    normalized.display = calendar.Display;
+  }
+  return normalized;
+}
+
+function normalizeUserCalendarSettings(payload) {
+  const settings = payload?.CalendarSettings || payload?.Settings || payload || {};
+  return {
+    defaultCalendarId: settings.DefaultCalendarID || settings.DefaultCalendarId || settings.DefaultCalendar || null,
+    defaultDuration: normalizeDuration(settings.DefaultEventDuration ?? settings.DefaultDuration ?? settings.Duration),
+    notifications: normalizeProtonNotifications(settings.Notifications),
+    raw: cloneObject(settings),
+  };
+}
+
+function normalizeCalendarSettings(calendarId, payload) {
+  const settings = payload?.CalendarSettings || payload?.Settings || payload || {};
+  return {
+    calendarId,
+    defaultDuration: normalizeDuration(settings.DefaultEventDuration ?? settings.DefaultDuration ?? settings.Duration),
+    notifications: normalizeProtonNotifications(settings.Notifications),
+    raw: cloneObject(settings),
+  };
+}
+
+function normalizeCalendarMetadata(calendarId, payload) {
+  const calendar = payload?.Calendar || payload?.Member || payload || {};
+  return {
+    calendarId: String(calendar.CalendarID || calendar.ID || calendarId),
+    name: calendar.Name || calendar.DisplayName || calendar.Title || null,
+    description: calendar.Description || "",
+    color: calendar.Color || null,
+    display: calendar.Display ?? null,
+    raw: cloneObject(calendar),
+  };
+}
+
+function buildUserCalendarSettingsBody(patch, current = {}) {
+  const body = cloneObject(current);
+  if (patch.defaultCalendarId !== undefined) {
+    body.DefaultCalendarID = patch.defaultCalendarId;
+  }
+  addSharedSettingsBodyFields(body, patch);
+  return body;
+}
+
+function buildCalendarSettingsBody(patch, current = {}) {
+  const body = cloneObject(current);
+  addSharedSettingsBodyFields(body, patch, { preferDefaultDuration: Object.hasOwn(body, "DefaultDuration") && !Object.hasOwn(body, "DefaultEventDuration") });
+  return body;
+}
+
+function addSharedSettingsBodyFields(body, patch, options = {}) {
+  if (patch.defaultDuration !== undefined) {
+    if (options.preferDefaultDuration) {
+      body.DefaultDuration = patch.defaultDuration;
+    } else {
+      body.DefaultEventDuration = patch.defaultDuration;
+    }
+  }
+  if (patch.notifications !== undefined) {
+    body.Notifications = patch.notifications === null ? [] : patch.notifications.map(toProtonNotification);
+  }
+}
+
+function buildCalendarMetadataBody(patch, current = {}) {
+  const body = cloneObject(current);
+  if (patch.name !== undefined) {
+    body.Name = patch.name;
+  }
+  if (patch.description !== undefined) {
+    body.Description = patch.description;
+  }
+  if (patch.color !== undefined) {
+    body.Color = patch.color;
+  }
+  if (patch.display !== undefined) {
+    body.Display = patch.display;
+  }
+  return body;
+}
+
+function toProtonNotification(notification) {
+  return {
+    Type: notification.type ?? notification.Type,
+    Trigger: notification.trigger ?? notification.Trigger,
+  };
+}
+
+function normalizeDuration(value) {
+  const duration = Number(value);
+  return Number.isInteger(duration) ? duration : null;
+}
+
+function cloneObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return JSON.parse(JSON.stringify(value));
 }
 
 function findPersistedSession(persistedSessions, uid, options = {}) {
@@ -773,5 +930,17 @@ function normalizeProtonNotifications(value) {
   if (value === undefined || value === null) {
     return null;
   }
-  return Array.isArray(value) ? value.map((item) => ({ ...item })) : null;
+  return Array.isArray(value)
+    ? value.map((item) => ({
+        type: item?.type ?? item?.Type,
+        trigger: item?.trigger ?? item?.Trigger,
+      }))
+    : null;
+}
+
+function normalizeEventNotifications(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  return Array.isArray(value) ? JSON.parse(JSON.stringify(value)) : null;
 }

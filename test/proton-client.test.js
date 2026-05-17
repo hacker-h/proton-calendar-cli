@@ -563,6 +563,105 @@ test("listCalendars normalizes Proton calendar payload", async () => {
   assert.equal(new URL(requests.at(-1).url).pathname, "/api/calendar/v1");
 });
 
+test("calendar settings methods use safe Proton settings endpoints", async () => {
+  const requests = [];
+  const client = new ProtonCalendarClient({
+    baseUrl: "https://calendar.proton.me",
+    sessionStore: testSessionStore(),
+    fetchImpl: async (url, init) => {
+      const parsed = new URL(String(url));
+      requests.push({ method: init.method, pathname: parsed.pathname, body: init.body ? JSON.parse(init.body) : null });
+      if (parsed.pathname === "/api/core/v4/users") {
+        return jsonResponse(200, { Code: 1000, User: { ID: "user-1" } });
+      }
+      if (init.method === "GET" && parsed.pathname === "/api/settings/calendar") {
+        return jsonResponse(200, {
+          Code: 1000,
+          CalendarSettings: {
+            DefaultCalendarID: "cal-1",
+            DefaultEventDuration: 60,
+            Timezone: "Europe/Berlin",
+            WeekStart: 1,
+            Notifications: [{ Type: 1, Trigger: "-PT10M" }],
+          },
+        });
+      }
+      if (init.method === "PUT" && parsed.pathname === "/api/settings/calendar") {
+        return jsonResponse(200, { Code: 1001, CalendarSettings: { ...JSON.parse(init.body), Notifications: [{ Type: 1, Trigger: "-PT5M" }] } });
+      }
+      if (init.method === "GET" && parsed.pathname === "/api/calendar/v1/cal-1/settings") {
+        return jsonResponse(200, { Code: 1000, Settings: { DefaultDuration: 30, InheritParentSettings: 0 } });
+      }
+      if (init.method === "PUT" && parsed.pathname === "/api/calendar/v1/cal-1/settings") {
+        return jsonResponse(200, { Code: 1001, Settings: JSON.parse(init.body) });
+      }
+      throw new Error(`Unexpected request: ${init.method} ${parsed.pathname}`);
+    },
+    maxRetries: 0,
+  });
+
+  const userSettings = await client.getUserCalendarSettings();
+  assert.equal(userSettings.defaultCalendarId, "cal-1");
+  assert.equal(userSettings.defaultDuration, 60);
+  assert.deepEqual(userSettings.notifications, [{ type: 1, trigger: "-PT10M" }]);
+
+  await client.updateUserCalendarSettings({
+    defaultCalendarId: "cal-2",
+    defaultDuration: 90,
+    notifications: [{ type: 1, trigger: "-PT5M" }],
+  });
+  await client.getCalendarSettings("cal-1");
+  await client.updateCalendarSettings("cal-1", { defaultDuration: 120, notifications: null });
+
+  assert.deepEqual(requests.map((request) => [request.method, request.pathname]), [
+    ["GET", "/api/core/v4/users"],
+    ["GET", "/api/settings/calendar"],
+    ["GET", "/api/settings/calendar"],
+    ["PUT", "/api/settings/calendar"],
+    ["GET", "/api/calendar/v1/cal-1/settings"],
+    ["GET", "/api/calendar/v1/cal-1/settings"],
+    ["PUT", "/api/calendar/v1/cal-1/settings"],
+  ]);
+  assert.deepEqual(requests[3].body, {
+    DefaultCalendarID: "cal-2",
+    DefaultEventDuration: 90,
+    Timezone: "Europe/Berlin",
+    WeekStart: 1,
+    Notifications: [{ Type: 1, Trigger: "-PT5M" }],
+  });
+  assert.deepEqual(requests[6].body, { DefaultDuration: 120, InheritParentSettings: 0, Notifications: [] });
+});
+
+test("calendar metadata update uses bootstrap member id", async () => {
+  const { client, requests } = await createMutationClientFixture();
+  const metadata = await client.updateCalendarMetadata("cal-1", {
+    name: "Renamed",
+    description: "Notes",
+    color: "#112233",
+    display: 1,
+  });
+  assert.equal(metadata.calendarId, "cal-1");
+
+  const metadataRequest = requests.find((request) => request.pathname === "/api/calendar/v1/cal-1/members/member-1");
+  assert.equal(metadataRequest.method, "PUT");
+  assert.deepEqual(metadataRequest.body, {
+    ID: "member-1",
+    CalendarID: "cal-1",
+    AddressID: "address-1",
+    Permissions: 127,
+    Name: "Renamed",
+    Description: "Notes",
+    Color: "#112233",
+    Display: 1,
+  });
+
+  await client.updateCalendarMetadata("cal-1", { color: "#778899" });
+  const secondMetadataRequest = requests.filter((request) => request.pathname === "/api/calendar/v1/cal-1/members/member-1").at(-1);
+  assert.equal(secondMetadataRequest.body.Name, "Renamed");
+  assert.equal(secondMetadataRequest.body.Description, "Notes");
+  assert.equal(secondMetadataRequest.body.Color, "#778899");
+});
+
 test("authStatus refreshes auth cookies and retries request", async () => {
   const calls = [];
   let usersRequestCount = 0;
@@ -830,7 +929,7 @@ test("concurrent auth failures share a single relogin attempt", async () => {
 test("event mutations send idempotency keys to Proton sync requests", async () => {
   const { client, requests } = await createMutationClientFixture();
 
-  await client.createEvent({
+  const created = await client.createEvent({
     calendarId: "cal-1",
     event: {
       title: "Create with key",
@@ -841,6 +940,7 @@ test("event mutations send idempotency keys to Proton sync requests", async () =
     },
     idempotencyKey: "create-key",
   });
+  assert.deepEqual(created.notifications, [{ Type: 1, Trigger: "-PT10M" }]);
 
   await client.updateEvent({
     calendarId: "cal-1",
@@ -1207,6 +1307,10 @@ async function createMutationClientFixture() {
       });
     }
 
+    if (request.method === "PUT" && parsed.pathname === "/api/calendar/v1/cal-1/members/member-1") {
+      return jsonResponse(200, { Code: 1001 });
+    }
+
     throw new Error(`Unexpected request: ${request.method} ${parsed.pathname}`);
   };
 
@@ -1225,6 +1329,16 @@ async function createMutationClientFixture() {
     uid: "uid-123",
     calendarId: "cal-1",
     memberId: "member-1",
+    member: {
+      ID: "member-1",
+      CalendarID: "cal-1",
+      AddressID: "address-1",
+      Permissions: 127,
+      Name: "Original",
+      Description: "Original notes",
+      Color: "#445566",
+      Display: 1,
+    },
     addressEmail: "bot@example.com",
     addressPrivateKey: addressKey.privateKey,
     calendarPrivateKey: calendarKey.privateKey,
