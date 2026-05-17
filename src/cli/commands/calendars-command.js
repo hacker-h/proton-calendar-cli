@@ -30,9 +30,13 @@ export async function runCalendarsCommand(args, context) {
   }
 
   const calendars = Array.isArray(payload?.data?.calendars) ? payload.data.calendars : [];
+  const requestedDefaultCalendar = calendars.find((calendar) => String(calendar?.id || "") === parsed.defaultCalendarId);
   const allowedCalendarIds = calendars.map((calendar) => String(calendar?.id || "")).filter(Boolean);
-  if (!allowedCalendarIds.includes(parsed.defaultCalendarId)) {
+  if (!requestedDefaultCalendar) {
     throw new CliError("INVALID_ARGS", `Requested calendar not found: ${parsed.defaultCalendarId}`);
+  }
+  if (requestedDefaultCalendar.readOnly === true) {
+    throw new CliError("INVALID_ARGS", `Requested calendar is read-only and cannot be used as default: ${parsed.defaultCalendarId}`);
   }
   if (payload?.data?.targetCalendarId) {
     throw new CliError(
