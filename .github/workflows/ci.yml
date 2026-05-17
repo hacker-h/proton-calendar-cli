@@ -27,6 +27,46 @@ on:
         required: false
         default: false
         type: boolean
+      live_enable_conferencing_metadata:
+        description: Enable read-only conferencing metadata live snapshots
+        required: false
+        default: false
+        type: boolean
+      live_enable_proton_meet:
+        description: Enable Proton Meet live mutations that create real Meet links
+        required: false
+        default: false
+        type: boolean
+      live_enable_zoom:
+        description: Enable Zoom live tests for paid accounts with approved Zoom integration
+        required: false
+        default: false
+        type: boolean
+      live_enable_availability:
+        description: Enable availability live tests
+        required: false
+        default: false
+        type: boolean
+      live_enable_appointment_scheduling:
+        description: Enable paid appointment-scheduling live tests
+        required: false
+        default: false
+        type: boolean
+      live_enable_subscribed_calendars:
+        description: Enable subscribed-calendar live tests
+        required: false
+        default: false
+        type: boolean
+      live_enable_holiday_calendars:
+        description: Enable holiday-calendar live tests that may consume calendar quota
+        required: false
+        default: false
+        type: boolean
+      live_enable_birthday_calendars:
+        description: Enable birthday-calendar live tests
+        required: false
+        default: false
+        type: boolean
   schedule:
     - cron: "17 4 * * 1"
 
@@ -270,6 +310,14 @@ jobs:
           PROTON_LIVE_ENABLE_SECOND_ACCOUNT: ${{ github.event.inputs.live_enable_second_account || vars.PROTON_LIVE_ENABLE_SECOND_ACCOUNT }}
           PROTON_LIVE_ENABLE_INVITES: ${{ github.event.inputs.live_enable_invites || vars.PROTON_LIVE_ENABLE_INVITES }}
           PROTON_LIVE_ENABLE_SHARING: ${{ github.event.inputs.live_enable_sharing || vars.PROTON_LIVE_ENABLE_SHARING }}
+          PROTON_LIVE_ENABLE_CONFERENCING_METADATA: ${{ github.event.inputs.live_enable_conferencing_metadata || vars.PROTON_LIVE_ENABLE_CONFERENCING_METADATA }}
+          PROTON_LIVE_ENABLE_PROTON_MEET: ${{ github.event.inputs.live_enable_proton_meet || vars.PROTON_LIVE_ENABLE_PROTON_MEET }}
+          PROTON_LIVE_ENABLE_ZOOM: ${{ github.event.inputs.live_enable_zoom || vars.PROTON_LIVE_ENABLE_ZOOM }}
+          PROTON_LIVE_ENABLE_AVAILABILITY: ${{ github.event.inputs.live_enable_availability || vars.PROTON_LIVE_ENABLE_AVAILABILITY }}
+          PROTON_LIVE_ENABLE_APPOINTMENT_SCHEDULING: ${{ github.event.inputs.live_enable_appointment_scheduling || vars.PROTON_LIVE_ENABLE_APPOINTMENT_SCHEDULING }}
+          PROTON_LIVE_ENABLE_SUBSCRIBED_CALENDARS: ${{ github.event.inputs.live_enable_subscribed_calendars || vars.PROTON_LIVE_ENABLE_SUBSCRIBED_CALENDARS }}
+          PROTON_LIVE_ENABLE_HOLIDAY_CALENDARS: ${{ github.event.inputs.live_enable_holiday_calendars || vars.PROTON_LIVE_ENABLE_HOLIDAY_CALENDARS }}
+          PROTON_LIVE_ENABLE_BIRTHDAY_CALENDARS: ${{ github.event.inputs.live_enable_birthday_calendars || vars.PROTON_LIVE_ENABLE_BIRTHDAY_CALENDARS }}
           PROTON_LIVE_ATTENDEE_EMAIL: ${{ secrets.PROTON_LIVE_ATTENDEE_EMAIL }}
           COOKIE_BUNDLE_PATH: secrets/proton-cookies.json
           CI_LIVE_QUARANTINE_PATH: ${{ github.event.inputs.live_quarantine_path || vars.CI_LIVE_QUARANTINE_PATH }}
