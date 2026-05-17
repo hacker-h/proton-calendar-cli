@@ -112,6 +112,14 @@
  * @property {string | undefined} [Name]
  * @property {string | undefined} [Color]
  * @property {number | undefined} [Permissions]
+ * @property {JsonValue | undefined} [Type]
+ * @property {JsonValue | undefined} [CalendarType]
+ * @property {JsonValue | undefined} [Flags]
+ * @property {JsonValue | undefined} [CalendarFlags]
+ * @property {boolean | number | undefined} [ReadOnly]
+ * @property {boolean | number | undefined} [IsReadOnly]
+ * @property {JsonValue | undefined} [SyncStatus]
+ * @property {JsonValue | undefined} [SyncState]
  */
 
 /**
