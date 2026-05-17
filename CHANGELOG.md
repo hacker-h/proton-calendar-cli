@@ -1,3 +1,12 @@
+# [1.13.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.12.0...v1.13.0) (2026-05-17)
+
+
+### Features
+
+* **api:** expose calendar settings routes ([d8f13a6](https://github.com/hacker-h/proton-calendar-cli/commit/d8f13a6c7fc72a67a2e81fca528a5854edeeeb14))
+* **cli:** support calendar settings patches ([048d57a](https://github.com/hacker-h/proton-calendar-cli/commit/048d57ae238c89716f275f72262c99ff2ed7ce4a))
+* **proton:** add calendar settings methods ([e48d272](https://github.com/hacker-h/proton-calendar-cli/commit/e48d272c19652a080e0607fd44e5304c5d45990d))
+
 # [1.12.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.11.0...v1.12.0) (2026-05-16)
 
 
