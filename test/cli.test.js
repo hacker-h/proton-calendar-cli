@@ -251,6 +251,37 @@ test("calendars command can update default calendar without login", async () => 
   assert.equal(JSON.parse(stdout.value()).data.defaultCalendarId, "cal-2");
 });
 
+
+test("calendars command rejects read-only calendars as default", async () => {
+  const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-read-only-default-test-"));
+  const serverEnvPath = path.join(tmpDir, "pc-server.env");
+  await writeFile(serverEnvPath, 'export DEFAULT_CALENDAR_ID="cal-1"\n', { mode: 0o600 });
+
+  const stderr = createWriter();
+  const exitCode = await runPcCli(["calendars", "--set-default", "cal-2", "--server-env", serverEnvPath], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async () => jsonResponse(200, {
+      data: {
+        targetCalendarId: null,
+        defaultCalendarId: "cal-1",
+        calendars: [
+          { id: "cal-1", name: "Work", default: true, target: false },
+          { id: "cal-2", name: "Team feed", default: false, target: false, readOnly: true },
+        ],
+      },
+    }),
+    stdout: createWriter(),
+    stderr,
+  });
+
+  assert.equal(exitCode, 2);
+  assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
+  assert.equal((await readFile(serverEnvPath, "utf8")).includes('DEFAULT_CALENDAR_ID="cal-2"'), false);
+});
+
 test("calendars command refuses default changes while target locked", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-calendar-target-lock-test-"));
   const serverEnvPath = path.join(tmpDir, "pc-server.env");
