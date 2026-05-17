@@ -122,6 +122,107 @@ test("lists configured calendars with default and allowlist metadata", async () 
   }
 });
 
+
+test("lists read-only special calendar metadata without requiring mutations", async () => {
+  const setup = await createFixture({
+    calendarIds: ["assistant-calendar", "subscribed-calendar"],
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar", "subscribed-calendar"],
+    defaultCalendarId: "assistant-calendar",
+    calendarMetadata: {
+      "subscribed-calendar": {
+        name: "Team feed",
+        type: 1,
+        flags: 4,
+        readOnly: true,
+        syncStatus: "synced",
+        permissions: 1,
+      },
+    },
+  });
+  try {
+    const response = await apiRequest(setup, "GET", "/v1/calendars");
+    assert.equal(response.status, 200);
+    assert.deepEqual(response.body.data.calendars[1], {
+      id: "subscribed-calendar",
+      name: "Team feed",
+      description: "",
+      color: null,
+      display: 1,
+      permissions: 1,
+      type: 1,
+      flags: 4,
+      readOnly: true,
+      syncStatus: "synced",
+      default: false,
+      target: false,
+      allowed: true,
+    });
+    assert.deepEqual(setup.proton.client.mutationCalls(), []);
+  } finally {
+    await setup.close();
+  }
+});
+
+
+test("rejects mutations against read-only special calendars", async () => {
+  const setup = await createFixture({
+    calendarIds: ["assistant-calendar", "subscribed-calendar"],
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar", "subscribed-calendar"],
+    defaultCalendarId: "assistant-calendar",
+    calendarMetadata: {
+      "subscribed-calendar": {
+        name: "Team feed",
+        readOnly: true,
+        permissions: 1,
+      },
+    },
+  });
+  try {
+    const created = await apiRequest(setup, "POST", "/v1/calendars/subscribed-calendar/events", {
+      title: "Blocked write",
+      start: "2026-03-10T10:00:00.000Z",
+      end: "2026-03-10T10:30:00.000Z",
+      timezone: "UTC",
+    });
+    assert.equal(created.status, 400);
+    assert.equal(created.body.error.code, "CALENDAR_READ_ONLY");
+
+    const updated = await apiRequest(setup, "PATCH", "/v1/calendars/subscribed-calendar/events/missing-event", {
+      title: "Blocked update",
+    });
+    assert.equal(updated.status, 400);
+    assert.equal(updated.body.error.code, "CALENDAR_READ_ONLY");
+
+    const deleted = await apiRequest(setup, "DELETE", "/v1/calendars/subscribed-calendar/events/missing-event");
+    assert.equal(deleted.status, 400);
+    assert.equal(deleted.body.error.code, "CALENDAR_READ_ONLY");
+
+    const userSettings = await apiRequest(setup, "PATCH", "/v1/calendar-settings", {
+      defaultCalendarId: "subscribed-calendar",
+    });
+    assert.equal(userSettings.status, 400);
+    assert.equal(userSettings.body.error.code, "CALENDAR_READ_ONLY");
+
+    const settings = await apiRequest(setup, "PATCH", "/v1/calendars/subscribed-calendar/settings", {
+      defaultDuration: 30,
+    });
+    assert.equal(settings.status, 400);
+    assert.equal(settings.body.error.code, "CALENDAR_READ_ONLY");
+
+    const metadata = await apiRequest(setup, "PATCH", "/v1/calendars/subscribed-calendar", {
+      name: "Renamed feed",
+    });
+    assert.equal(metadata.status, 400);
+    assert.equal(metadata.body.error.code, "CALENDAR_READ_ONLY");
+
+    assert.deepEqual(setup.proton.client.mutationCalls(), []);
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reads and updates user calendar settings through REST route", async () => {
   const setup = await createFixture({
     targetCalendarId: null,
@@ -1913,6 +2014,7 @@ async function createFixture(options = {}) {
     createEventFailureTitle: options.createEventFailureTitle,
     mutationCalls: options.mutationCalls,
     listCalls: options.listCalls,
+    calendarMetadata: options.calendarMetadata,
   });
 
   const initialSessionCookie = options.initialSessionCookie || proton.validSessionCookie;
@@ -2022,6 +2124,7 @@ function createMockProtonClient(options) {
       color: calendarId === primaryCalendarId ? "#3366ff" : null,
       display: 1,
       permissions: 127,
+      ...(options.calendarMetadata?.[calendarId] || {}),
     });
   }
 
