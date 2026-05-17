@@ -1,3 +1,10 @@
+# [1.14.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.13.0...v1.14.0) (2026-05-17)
+
+
+### Features
+
+* **proton:** add invite payload prototype ([ad658dc](https://github.com/hacker-h/proton-calendar-cli/commit/ad658dc3e006b2a0099de1f4121c1737c22e24a4))
+
 # [1.13.0](https://github.com/hacker-h/proton-calendar-cli/compare/v1.12.0...v1.13.0) (2026-05-17)
 
 
