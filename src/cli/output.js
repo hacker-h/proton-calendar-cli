@@ -10,6 +10,10 @@ export function writeOutput(stdout, output, payload) {
   }
 
   const events = Array.isArray(payload?.data?.events) ? payload.data.events : [];
+  if (!Array.isArray(payload?.data?.events)) {
+    write(stdout, `${JSON.stringify(payload, null, 2)}\n`);
+    return;
+  }
   if (events.length === 0) {
     write(stdout, "No events\n");
     return;

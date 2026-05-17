@@ -29,6 +29,10 @@ Examples:
   pc update --check
   pc doctor auth
   pc calendars
+  pc calendars --settings
+  pc calendars --settings defaultCalendarId=cal_123
+  pc calendars --calendar cal_123 --settings
+  pc calendars --calendar cal_123 name="Work" color=#3366ff
   pc ls
   pc ls today --title review
   pc ls tomorrow --unprotected
@@ -88,6 +92,9 @@ Doctor options:
 Calendars options:
   --set-default <id> Set the default calendar in the generated server env file
   --server-env <path> Server env file to update when setting default
+  --settings         Read or update user/per-calendar settings
+  --calendar <id>    Target an existing calendar for settings or metadata updates
+  field=value        With --settings, PATCH settings; with --calendar, PATCH metadata
 
 List options:
   --protected         Show only protected events

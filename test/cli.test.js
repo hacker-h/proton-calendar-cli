@@ -279,6 +279,84 @@ test("calendars command refuses default changes while target locked", async () =
   assert.equal(JSON.parse(stderr.value()).error.code, "INVALID_ARGS");
 });
 
+test("calendars command reads and patches calendar settings routes", async () => {
+  const requests = [];
+  const stdout = createWriter();
+  const exitCode = await runPcCli(["calendars", "--calendar", "cal-1", "--settings", "defaultDuration=90"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, {
+        data: {
+          calendarId: "cal-1",
+          defaultDuration: 90,
+        },
+      });
+    },
+    stdout,
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/calendars/cal-1/settings");
+  assert.equal(requests[0].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[0].init.body), { defaultDuration: 90 });
+  assert.equal(JSON.parse(stdout.value()).data.defaultDuration, 90);
+});
+
+test("calendars command reads and patches user calendar settings", async () => {
+  const requests = [];
+  const exitCode = await runPcCli(["calendars", "--settings", "defaultCalendarId=cal-2", "notifications=[{\"Type\":1,\"Trigger\":\"-PT10M\"}]"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, { data: { defaultCalendarId: "cal-2" } });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/calendar-settings");
+  assert.equal(requests[0].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+    defaultCalendarId: "cal-2",
+    notifications: [{ Type: 1, Trigger: "-PT10M" }],
+  });
+});
+
+test("calendars command patches metadata on existing calendar route", async () => {
+  const requests = [];
+  const exitCode = await runPcCli(["calendars", "--calendar", "cal-1", "name=2026", "description=123", "color=#112233", "display=1"], {
+    env: {
+      PC_API_BASE_URL: "http://127.0.0.1:8787",
+      PC_API_TOKEN: "token",
+    },
+    fetchImpl: async (url, init) => {
+      requests.push({ url: new URL(String(url)), init });
+      return jsonResponse(200, { data: { calendarId: "cal-1", name: "Renamed" } });
+    },
+    stdout: createWriter(),
+    stderr: createWriter(),
+  });
+
+  assert.equal(exitCode, 0);
+  assert.equal(requests[0].url.pathname, "/v1/calendars/cal-1");
+  assert.equal(requests[0].init.method, "PATCH");
+  assert.deepEqual(JSON.parse(requests[0].init.body), {
+        name: "2026",
+        description: "123",
+    color: "#112233",
+    display: 1,
+  });
+});
+
 test("login rejects unknown default calendar", async () => {
   const tmpDir = await mkdtemp(path.join(os.tmpdir(), "pc-cli-login-invalid-calendar-test-"));
   const cookieBundlePath = path.join(tmpDir, "proton-cookies.json");
