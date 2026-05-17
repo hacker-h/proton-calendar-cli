@@ -549,6 +549,27 @@ test("listCalendars normalizes Proton calendar payload", async () => {
         Calendars: [
           { ID: "cal-1", Name: "Work", Color: "#3366ff", Permissions: 127 },
           { ID: "cal-2", DisplayName: "Personal" },
+          {
+            ID: "cal-subscribed",
+            Name: "Read-only feed",
+            Color: "#00aa88",
+            Permissions: 1,
+            Description: "External ICS feed",
+            Display: 1,
+            Type: 1,
+            Flags: 4,
+            IsReadOnly: 1,
+            SyncStatus: "synced",
+          },
+          {
+            CalendarID: "cal-aliases",
+            Title: "Alias feed",
+            Permissions: 1,
+            CalendarType: "subscribed",
+            CalendarFlags: { subscribed: true },
+            ReadOnly: 0,
+            SyncState: { state: "queued" },
+          },
         ],
       });
     },
@@ -559,6 +580,28 @@ test("listCalendars normalizes Proton calendar payload", async () => {
   assert.deepEqual(calendars, [
     { id: "cal-1", name: "Work", color: "#3366ff", permissions: 127 },
     { id: "cal-2", name: "Personal", color: null, permissions: null },
+    {
+      id: "cal-subscribed",
+      name: "Read-only feed",
+      color: "#00aa88",
+      permissions: 1,
+      description: "External ICS feed",
+      display: 1,
+      type: 1,
+      flags: 4,
+      syncStatus: "synced",
+      readOnly: true,
+    },
+    {
+      id: "cal-aliases",
+      name: "Alias feed",
+      color: null,
+      permissions: 1,
+      type: "subscribed",
+      flags: { subscribed: true },
+      syncStatus: { state: "queued" },
+      readOnly: false,
+    },
   ]);
   assert.equal(new URL(requests.at(-1).url).pathname, "/api/calendar/v1");
 });

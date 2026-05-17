@@ -802,7 +802,41 @@ function normalizeCalendar(calendar) {
   if (calendar?.Display !== undefined) {
     normalized.display = calendar.Display;
   }
+  copyFirstCalendarField(normalized, calendar, ["Type", "CalendarType", "type", "calendarType"], "type");
+  copyFirstCalendarField(normalized, calendar, ["Flags", "CalendarFlags", "flags", "calendarFlags"], "flags");
+  copyFirstCalendarField(normalized, calendar, ["SyncStatus", "SyncState", "syncStatus", "syncState"], "syncStatus");
+  copyFirstCalendarBoolean(normalized, calendar, ["ReadOnly", "IsReadOnly", "readOnly", "isReadOnly"], "readOnly");
   return normalized;
+}
+
+function copyFirstCalendarField(target, source, sourceKeys, targetKey) {
+  for (const sourceKey of sourceKeys) {
+    if (source?.[sourceKey] !== undefined) {
+      target[targetKey] = cloneCalendarMetadataValue(source[sourceKey]);
+      return;
+    }
+  }
+}
+
+function cloneCalendarMetadataValue(value) {
+  if (!value || typeof value !== "object") {
+    return value;
+  }
+  if (Array.isArray(value)) {
+    return value.map(cloneCalendarMetadataValue);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function copyFirstCalendarBoolean(target, source, sourceKeys, targetKey) {
+  for (const sourceKey of sourceKeys) {
+    const value = source?.[sourceKey];
+    if (value === undefined) {
+      continue;
+    }
+    target[targetKey] = value === true || value === 1;
+    return;
+  }
 }
 
 function normalizeUserCalendarSettings(payload) {
