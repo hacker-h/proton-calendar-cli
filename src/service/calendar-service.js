@@ -39,6 +39,7 @@ export class CalendarService {
 
     this.protonClient = options.protonClient;
     this.sessionStore = options.sessionStore;
+    this.calendarReadOnlyMapPromise = null;
     this.recurrenceMaxIterations = readPositiveNumber(options.recurrenceMaxIterations, DEFAULT_RECURRENCE_MAX_ITERATIONS);
   }
 
@@ -70,14 +71,7 @@ export class CalendarService {
 
   async listCalendars() {
     const calendars = (await this.protonClient.listCalendars())
-      .map((calendar) => ({
-        id: String(calendar.id || calendar.calendarId || ""),
-        name: String(calendar.name || calendar.id || calendar.calendarId || ""),
-        description: calendar.description || "",
-        color: calendar.color || null,
-        display: calendar.display ?? null,
-        permissions: calendar.permissions ?? null,
-      }))
+      .map((calendar) => normalizeListedCalendar(calendar))
       .filter((calendar) => calendar.id)
       .filter((calendar) => this.allowedCalendarIds.size === 0 || this.allowedCalendarIds.has(calendar.id))
       .map((calendar) => ({
@@ -106,6 +100,7 @@ export class CalendarService {
     }
     if (patch.defaultCalendarId !== undefined) {
       this.#assertAllowedCalendar(patch.defaultCalendarId);
+      await this.#assertWritableCalendar(patch.defaultCalendarId);
     }
     return normalizeUserCalendarSettings(await this.protonClient.updateUserCalendarSettings(patch));
   }
@@ -118,12 +113,14 @@ export class CalendarService {
   async updateCalendarSettings(calendarId, payload) {
     const resolvedCalendarId = this.#resolveCalendarId(calendarId, { allowDefault: false });
     const patch = validateCalendarSettingsPatch(payload);
+    await this.#assertWritableCalendar(resolvedCalendarId);
     return normalizeCalendarSettings(await this.protonClient.updateCalendarSettings(resolvedCalendarId, patch), resolvedCalendarId);
   }
 
   async updateCalendarMetadata(calendarId, payload) {
     const resolvedCalendarId = this.#resolveCalendarId(calendarId, { allowDefault: false });
     const patch = validateCalendarMetadataPatch(payload);
+    await this.#assertWritableCalendar(resolvedCalendarId);
     return normalizeCalendarMetadata(await this.protonClient.updateCalendarMetadata(resolvedCalendarId, patch), resolvedCalendarId);
   }
 
@@ -188,6 +185,7 @@ export class CalendarService {
     const calendarId = this.#resolveCalendarId(options.calendarId, { allowDefault: true });
     assertCalendarPayload(payload, calendarId);
     const eventInput = validateCreatePayload(payload);
+    await this.#assertWritableCalendar(calendarId);
 
     const created = normalizeEvent(
       await this.protonClient.createEvent({
@@ -223,6 +221,7 @@ export class CalendarService {
     const scope = normalizeScope(options.scope, parsedOccurrence ? "single" : "series");
     const occurrenceStart = normalizeOccurrenceStart(options.occurrenceStart || parsedOccurrence?.occurrenceStart, scope);
     const patch = validatePatchPayload(payload, scope);
+    await this.#assertWritableCalendar(calendarId);
 
     const updated = normalizeEvent(
       await this.protonClient.updateEvent({
@@ -248,6 +247,7 @@ export class CalendarService {
 
     const scope = normalizeScope(options.scope, parsedOccurrence ? "single" : "series");
     const occurrenceStart = normalizeOccurrenceStart(options.occurrenceStart || parsedOccurrence?.occurrenceStart, scope);
+    await this.#assertWritableCalendar(calendarId);
 
     await this.protonClient.deleteEvent({
       calendarId,
@@ -340,6 +340,25 @@ export class CalendarService {
     }
 
     throw new ApiError(400, "CALENDAR_ID_REQUIRED", "calendarId is required for this request");
+  }
+
+  async #assertWritableCalendar(calendarId) {
+    if (typeof this.protonClient.listCalendars !== "function") {
+      return;
+    }
+    const readOnlyMap = await this.#getCalendarReadOnlyMap();
+    if (readOnlyMap.get(calendarId) === true) {
+      throw new ApiError(400, "CALENDAR_READ_ONLY", "calendar is read-only", { calendarId });
+    }
+  }
+
+  async #getCalendarReadOnlyMap() {
+    if (!this.calendarReadOnlyMapPromise) {
+      this.calendarReadOnlyMapPromise = this.protonClient.listCalendars().then((calendars) => new Map(
+        calendars.map((item) => [String(item?.id || item?.calendarId || ""), item?.readOnly === true])
+      ));
+    }
+    return await this.calendarReadOnlyMapPromise;
   }
 
   #assertAllowedCalendar(calendarId) {
@@ -477,6 +496,28 @@ function validatePatchPayload(payload, scope) {
   }
 
   return patch;
+}
+
+function normalizeListedCalendar(calendar) {
+  const normalized = {
+    id: String(calendar.id || calendar.calendarId || ""),
+    name: String(calendar.name || calendar.id || calendar.calendarId || ""),
+    description: calendar.description || "",
+    color: calendar.color || null,
+    display: calendar.display ?? null,
+    permissions: calendar.permissions ?? null,
+  };
+  copyOptionalCalendarField(normalized, calendar, "type");
+  copyOptionalCalendarField(normalized, calendar, "flags");
+  copyOptionalCalendarField(normalized, calendar, "readOnly");
+  copyOptionalCalendarField(normalized, calendar, "syncStatus");
+  return normalized;
+}
+
+function copyOptionalCalendarField(target, source, key) {
+  if (source?.[key] !== undefined) {
+    target[key] = source[key];
+  }
 }
 
 function validateUserCalendarSettingsPatch(payload) {
