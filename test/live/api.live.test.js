@@ -7,6 +7,7 @@ import {
   buildEventTitle,
   cleanupEvents,
   readLiveConfig,
+  skipUnlessCapability,
   waitForApi,
 } from "./helpers/live-test-utils.js";
 
@@ -24,6 +25,58 @@ test("live api suite", { skip: !config.enabled ? "PC_API_BASE_URL and PC_API_TOK
       assert.equal(auth.status, 200);
       assert.equal(auth.body.data.authenticated, true);
       assert.equal(auth.body.data.defaultCalendarId, config.calendarId);
+    });
+
+    await t.test("calendar settings read endpoints are safe", async () => {
+      const userSettings = await apiRequest(config, "GET", "/v1/calendar-settings");
+      assert.equal(userSettings.status, 200);
+      assert.equal(Object.hasOwn(userSettings.body, "data"), true);
+
+      if (config.calendarId) {
+        const calendarSettings = await apiRequest(config, "GET", `/v1/calendars/${encodeURIComponent(config.calendarId)}/settings`);
+        assert.equal(calendarSettings.status, 200);
+        assert.equal(calendarSettings.body.data.calendarId, config.calendarId);
+      }
+    });
+
+    await t.test("calendar settings and metadata mutations restore originals", {
+      skip: skipUnlessCapability(config, "calendarCrud", { reason: "calendar CRUD live mutations require PROTON_LIVE_ENABLE_CALENDAR_CRUD=1" }),
+    }, async () => {
+      assert.ok(config.calendarId, "calendar CRUD live mutations require configured calendar id");
+      const calendarRoute = `/v1/calendars/${encodeURIComponent(config.calendarId)}`;
+      const settingsRoute = `${calendarRoute}/settings`;
+      const originalUserSettings = await apiRequest(config, "GET", "/v1/calendar-settings");
+      const originalCalendarSettings = await apiRequest(config, "GET", settingsRoute);
+      const calendars = await apiRequest(config, "GET", "/v1/calendars");
+      assert.equal(originalUserSettings.status, 200);
+      assert.equal(originalCalendarSettings.status, 200);
+      assert.equal(calendars.status, 200);
+      const originalMetadata = calendars.body.data.calendars.find((calendar) => calendar.id === config.calendarId);
+      assert.ok(originalMetadata);
+
+      try {
+        const patchedSettings = await apiRequest(config, "PATCH", settingsRoute, { defaultDuration: 60 });
+        assert.equal(patchedSettings.status, 200);
+        assert.equal(patchedSettings.body.data.defaultDuration, 60);
+
+        const patchedUserSettings = await apiRequest(config, "PATCH", "/v1/calendar-settings", { defaultCalendarId: config.calendarId });
+        assert.equal(patchedUserSettings.status, 200);
+        assert.equal(patchedUserSettings.body.data.defaultCalendarId, config.calendarId);
+
+        const patchedMetadata = await apiRequest(config, "PATCH", calendarRoute, {
+          name: originalMetadata.name,
+          description: originalMetadata.description || "",
+          display: originalMetadata.display ?? 1,
+          ...(originalMetadata.color ? { color: originalMetadata.color } : {}),
+        });
+        assert.equal(patchedMetadata.status, 200);
+      } finally {
+        await restoreLiveCalendarCrud(config, {
+          userSettings: originalUserSettings.body.data,
+          calendarSettings: originalCalendarSettings.body.data,
+          metadata: originalMetadata,
+        });
+      }
     });
 
     await t.test("list supports date ranges, pagination, and calendar-scoped routes", async () => {
@@ -631,4 +684,23 @@ function liveTitles(events, prefix) {
 
 function escapeRegExp(value) {
   return String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+}
+
+async function restoreLiveCalendarCrud(config, original) {
+  if (original.userSettings?.defaultCalendarId) {
+    await apiRequest(config, "PATCH", "/v1/calendar-settings", {
+      defaultCalendarId: original.userSettings.defaultCalendarId,
+    });
+  }
+  if (original.calendarSettings?.defaultDuration) {
+    await apiRequest(config, "PATCH", `/v1/calendars/${encodeURIComponent(config.calendarId)}/settings`, {
+      defaultDuration: original.calendarSettings.defaultDuration,
+    });
+  }
+  await apiRequest(config, "PATCH", `/v1/calendars/${encodeURIComponent(config.calendarId)}`, {
+    name: original.metadata.name,
+    description: original.metadata.description || "",
+    display: original.metadata.display ?? 1,
+    ...(original.metadata.color ? { color: original.metadata.color } : {}),
+  });
 }
