@@ -122,6 +122,106 @@ test("lists configured calendars with default and allowlist metadata", async () 
   }
 });
 
+test("reads and updates user calendar settings through REST route", async () => {
+  const setup = await createFixture({
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar", "team-calendar"],
+    defaultCalendarId: "assistant-calendar",
+  });
+  try {
+    const before = await apiRequest(setup, "GET", "/v1/calendar-settings");
+    assert.equal(before.status, 200);
+    assert.equal(before.body.data.defaultCalendarId, "assistant-calendar");
+
+    const patched = await apiRequest(setup, "PATCH", "/v1/calendar-settings", {
+      defaultCalendarId: "team-calendar",
+      defaultDuration: 90,
+      notifications: [{ Type: 1, Trigger: "-PT10M" }],
+    });
+    assert.equal(patched.status, 200);
+    assert.equal(patched.body.data.defaultCalendarId, "team-calendar");
+    assert.equal(patched.body.data.defaultDuration, 90);
+    assert.deepEqual(patched.body.data.notifications, [{ type: 1, trigger: "-PT10M" }]);
+  } finally {
+    await setup.close();
+  }
+});
+
+test("reads and updates per-calendar settings and metadata without creating calendars", async () => {
+  const setup = await createFixture({
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar", "team-calendar"],
+    defaultCalendarId: "assistant-calendar",
+  });
+  try {
+    const settings = await apiRequest(setup, "GET", "/v1/calendars/team-calendar/settings");
+    assert.equal(settings.status, 200);
+    assert.equal(settings.body.data.calendarId, "team-calendar");
+
+    const patchedSettings = await apiRequest(setup, "PATCH", "/v1/calendars/team-calendar/settings", {
+      defaultDuration: 120,
+      notifications: [{ type: 1, trigger: "-PT5M" }],
+    });
+    assert.equal(patchedSettings.status, 200);
+    assert.equal(patchedSettings.body.data.defaultDuration, 120);
+
+    const metadata = await apiRequest(setup, "PATCH", "/v1/calendars/team-calendar", {
+      name: "Team Updated",
+      description: "Updated safely",
+      color: "#aabbcc",
+      display: 1,
+    });
+    assert.equal(metadata.status, 200);
+    assert.equal(metadata.body.data.name, "Team Updated");
+    assert.equal(metadata.body.data.description, "Updated safely");
+    assert.equal(metadata.body.data.color, "#AABBCC");
+
+    const calendars = await apiRequest(setup, "GET", "/v1/calendars");
+    assert.deepEqual(calendars.body.data.calendars.map((calendar) => calendar.id), ["assistant-calendar", "team-calendar"]);
+    assert.equal(calendars.body.data.calendars[1].name, "Team Updated");
+  } finally {
+    await setup.close();
+  }
+});
+
+test("calendar settings and metadata validate safe mutable fields", async () => {
+  const setup = await createFixture({
+    targetCalendarId: null,
+    allowedCalendarIds: ["assistant-calendar"],
+    defaultCalendarId: "assistant-calendar",
+  });
+  try {
+    const badColor = await apiRequest(setup, "PATCH", "/v1/calendars/assistant-calendar", { color: "blue" });
+    assert.equal(badColor.status, 400);
+    assert.equal(badColor.body.error.code, "INVALID_FIELD");
+
+    const badDuration = await apiRequest(setup, "PATCH", "/v1/calendar-settings", { defaultDuration: 45 });
+    assert.equal(badDuration.status, 400);
+    assert.equal(badDuration.body.error.code, "INVALID_FIELD");
+
+    const blockedDefault = await apiRequest(setup, "PATCH", "/v1/calendar-settings", { defaultCalendarId: "private-calendar" });
+    assert.equal(blockedDefault.status, 403);
+    assert.equal(blockedDefault.body.error.code, "CALENDAR_NOT_ALLOWED");
+  } finally {
+    await setup.close();
+  }
+});
+
+test("user calendar settings patches are blocked by target calendar hard-lock", async () => {
+  const setup = await createFixture({
+    targetCalendarId: "assistant-calendar",
+    allowedCalendarIds: ["assistant-calendar"],
+    defaultCalendarId: "assistant-calendar",
+  });
+  try {
+    const blocked = await apiRequest(setup, "PATCH", "/v1/calendar-settings", { defaultDuration: 90 });
+    assert.equal(blocked.status, 400);
+    assert.equal(blocked.body.error.code, "CALENDAR_SCOPE_VIOLATION");
+  } finally {
+    await setup.close();
+  }
+});
+
 test("reports unauthenticated auth status for ApiError AUTH_EXPIRED", async () => {
   const setup = await createFixture({ initialSessionCookie: "expired-cookie" });
   try {
@@ -1909,12 +2009,29 @@ function createMockProtonClient(options) {
   const primaryCalendarId = calendarIds[0];
 
   const calendarStores = new Map();
+  const calendarSettings = new Map();
+  const calendarMetadata = new Map();
   const mutationCalls = [];
   for (const calendarId of calendarIds) {
     calendarStores.set(calendarId, new Map());
+    calendarSettings.set(calendarId, { calendarId, defaultDuration: 60, notifications: null, raw: {} });
+    calendarMetadata.set(calendarId, {
+      calendarId,
+      name: calendarId === primaryCalendarId ? "Assistant" : `Calendar ${calendarIds.indexOf(calendarId) + 1}`,
+      description: "",
+      color: calendarId === primaryCalendarId ? "#3366ff" : null,
+      display: 1,
+      permissions: 127,
+    });
   }
 
   let nextId = 1;
+  let userCalendarSettings = {
+    defaultCalendarId: primaryCalendarId,
+    defaultDuration: 60,
+    notifications: null,
+    raw: {},
+  };
 
   async function assertAuthorized() {
     const cookieHeader = await sessionStore.getCookieHeader(`${baseUrl}/api/core/v4/users`);
@@ -1964,12 +2081,40 @@ function createMockProtonClient(options) {
 
     async listCalendars() {
       await assertAuthorized();
-      return calendarIds.map((calendarId, index) => ({
-        id: calendarId,
-        name: index === 0 ? "Assistant" : `Calendar ${index + 1}`,
-        color: index === 0 ? "#3366ff" : null,
-        permissions: 127,
-      }));
+      return calendarIds.map((calendarId) => ({ ...calendarMetadata.get(calendarId) }));
+    },
+
+    async getUserCalendarSettings() {
+      await assertAuthorized();
+      return cloneSettings(userCalendarSettings);
+    },
+
+    async updateUserCalendarSettings(patch) {
+      await assertAuthorized();
+      userCalendarSettings = { ...userCalendarSettings, ...patch };
+      return cloneSettings(userCalendarSettings);
+    },
+
+    async getCalendarSettings(calendarId) {
+      await assertAuthorized();
+      readCalendarStore(calendarId);
+      return cloneSettings(calendarSettings.get(calendarId));
+    },
+
+    async updateCalendarSettings(calendarId, patch) {
+      await assertAuthorized();
+      readCalendarStore(calendarId);
+      const next = { ...calendarSettings.get(calendarId), ...patch };
+      calendarSettings.set(calendarId, next);
+      return cloneSettings(next);
+    },
+
+    async updateCalendarMetadata(calendarId, patch) {
+      await assertAuthorized();
+      readCalendarStore(calendarId);
+      const next = { ...calendarMetadata.get(calendarId), ...patch };
+      calendarMetadata.set(calendarId, next);
+      return { ...next, raw: {} };
     },
 
     async listEvents({ calendarId, limit, cursor }) {
@@ -2242,6 +2387,10 @@ function applyPatch(event, patch) {
 
 function cloneNotifications(notifications) {
   return notifications === undefined ? null : JSON.parse(JSON.stringify(notifications));
+}
+
+function cloneSettings(settings) {
+  return JSON.parse(JSON.stringify(settings));
 }
 
 function ensureExDate(event, occurrenceStart) {

@@ -85,6 +85,36 @@ export function createApiServer(config, options = {}) {
         return;
       }
 
+      if (method === "GET" && url.pathname === "/v1/calendar-settings") {
+        send(200, { data: await service.getUserCalendarSettings() });
+        return;
+      }
+
+      if (method === "PATCH" && url.pathname === "/v1/calendar-settings") {
+        const body = await readJsonBody(req);
+        send(200, { data: await service.updateUserCalendarSettings(body) });
+        return;
+      }
+
+      const calendarSettingsRoute = parseCalendarSettingsRoute(url.pathname);
+      if (calendarSettingsRoute && method === "GET") {
+        send(200, { data: await service.getCalendarSettings(calendarSettingsRoute.calendarId) });
+        return;
+      }
+
+      if (calendarSettingsRoute && method === "PATCH") {
+        const body = await readJsonBody(req);
+        send(200, { data: await service.updateCalendarSettings(calendarSettingsRoute.calendarId, body) });
+        return;
+      }
+
+      const calendarMetadataRoute = parseCalendarMetadataRoute(url.pathname);
+      if (calendarMetadataRoute && method === "PATCH") {
+        const body = await readJsonBody(req);
+        send(200, { data: await service.updateCalendarMetadata(calendarMetadataRoute.calendarId, body) });
+        return;
+      }
+
       const icsRoute = parseIcsRoute(url.pathname);
 
       if (icsRoute && method === "GET") {
@@ -305,6 +335,22 @@ function parseEventRoute(pathname) {
     };
   }
 
+  return null;
+}
+
+function parseCalendarSettingsRoute(pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts.length === 4 && parts[0] === "v1" && parts[1] === "calendars" && parts[3] === "settings") {
+    return { calendarId: decodeURIComponent(parts[2]) };
+  }
+  return null;
+}
+
+function parseCalendarMetadataRoute(pathname) {
+  const parts = pathname.split("/").filter(Boolean);
+  if (parts.length === 3 && parts[0] === "v1" && parts[1] === "calendars") {
+    return { calendarId: decodeURIComponent(parts[2]) };
+  }
   return null;
 }
 

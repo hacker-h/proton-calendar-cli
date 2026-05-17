@@ -18,6 +18,9 @@ const ALLOWED_FIELDS = new Set([
 const MUTATION_SCOPES = new Set(["single", "following", "series"]);
 const VALID_FREQ = new Set(["DAILY", "WEEKLY", "MONTHLY", "YEARLY"]);
 const VALID_WEEKDAYS = new Set(["MO", "TU", "WE", "TH", "FR", "SA", "SU"]);
+const VALID_DEFAULT_DURATIONS = new Set([30, 60, 90, 120]);
+const METADATA_FIELDS = new Set(["name", "description", "color", "display"]);
+const SETTINGS_FIELDS = new Set(["defaultCalendarId", "defaultDuration", "notifications"]);
 const DEFAULT_RECURRENCE_MAX_ITERATIONS = 50000;
 const EVENT_FETCH_PAGE_LIMIT = 50;
 const EVENT_FETCH_PAGE_SIZE = 200;
@@ -68,9 +71,11 @@ export class CalendarService {
   async listCalendars() {
     const calendars = (await this.protonClient.listCalendars())
       .map((calendar) => ({
-        id: String(calendar.id || ""),
-        name: String(calendar.name || calendar.id || ""),
+        id: String(calendar.id || calendar.calendarId || ""),
+        name: String(calendar.name || calendar.id || calendar.calendarId || ""),
+        description: calendar.description || "",
         color: calendar.color || null,
+        display: calendar.display ?? null,
         permissions: calendar.permissions ?? null,
       }))
       .filter((calendar) => calendar.id)
@@ -88,6 +93,38 @@ export class CalendarService {
       defaultCalendarId: this.defaultCalendarId,
       allowedCalendarIds: [...this.allowedCalendarIds].sort(),
     };
+  }
+
+  async getUserCalendarSettings() {
+    return normalizeUserCalendarSettings(await this.protonClient.getUserCalendarSettings());
+  }
+
+  async updateUserCalendarSettings(payload) {
+    const patch = validateUserCalendarSettingsPatch(payload);
+    if (this.targetCalendarId) {
+      throw new ApiError(400, "CALENDAR_SCOPE_VIOLATION", "calendar settings cannot be patched while target calendar hard-lock mode is active");
+    }
+    if (patch.defaultCalendarId !== undefined) {
+      this.#assertAllowedCalendar(patch.defaultCalendarId);
+    }
+    return normalizeUserCalendarSettings(await this.protonClient.updateUserCalendarSettings(patch));
+  }
+
+  async getCalendarSettings(calendarId) {
+    const resolvedCalendarId = this.#resolveCalendarId(calendarId, { allowDefault: false });
+    return normalizeCalendarSettings(await this.protonClient.getCalendarSettings(resolvedCalendarId), resolvedCalendarId);
+  }
+
+  async updateCalendarSettings(calendarId, payload) {
+    const resolvedCalendarId = this.#resolveCalendarId(calendarId, { allowDefault: false });
+    const patch = validateCalendarSettingsPatch(payload);
+    return normalizeCalendarSettings(await this.protonClient.updateCalendarSettings(resolvedCalendarId, patch), resolvedCalendarId);
+  }
+
+  async updateCalendarMetadata(calendarId, payload) {
+    const resolvedCalendarId = this.#resolveCalendarId(calendarId, { allowDefault: false });
+    const patch = validateCalendarMetadataPatch(payload);
+    return normalizeCalendarMetadata(await this.protonClient.updateCalendarMetadata(resolvedCalendarId, patch), resolvedCalendarId);
   }
 
   async listEvents(input, options = {}) {
@@ -440,6 +477,177 @@ function validatePatchPayload(payload, scope) {
   }
 
   return patch;
+}
+
+function validateUserCalendarSettingsPatch(payload) {
+  const patch = validateSettingsPatch(payload, { allowDefaultCalendar: true });
+  if (patch.defaultCalendarId !== undefined) {
+    patch.defaultCalendarId = requireString(patch.defaultCalendarId, "defaultCalendarId", 1, 300);
+  }
+  return patch;
+}
+
+function validateCalendarSettingsPatch(payload) {
+  return validateSettingsPatch(payload, { allowDefaultCalendar: false });
+}
+
+function validateSettingsPatch(payload, options) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "Request body must be a JSON object");
+  }
+  const patch = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!SETTINGS_FIELDS.has(key)) {
+      throw new ApiError(400, "INVALID_FIELD", `Unsupported field: ${key}`);
+    }
+    if (key === "defaultCalendarId") {
+      if (!options.allowDefaultCalendar) {
+        throw new ApiError(400, "INVALID_FIELD", "defaultCalendarId is only supported for user calendar settings");
+      }
+      patch.defaultCalendarId = value;
+      continue;
+    }
+    if (key === "defaultDuration") {
+      patch.defaultDuration = validateDefaultDuration(value);
+      continue;
+    }
+    if (key === "notifications") {
+      patch.notifications = validateSettingsNotifications(value);
+    }
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new ApiError(400, "EMPTY_PATCH", "At least one mutable field is required");
+  }
+  return patch;
+}
+
+function validateCalendarMetadataPatch(payload) {
+  if (!payload || typeof payload !== "object" || Array.isArray(payload)) {
+    throw new ApiError(400, "INVALID_PAYLOAD", "Request body must be a JSON object");
+  }
+  const patch = {};
+  for (const [key, value] of Object.entries(payload)) {
+    if (!METADATA_FIELDS.has(key)) {
+      throw new ApiError(400, "INVALID_FIELD", `Unsupported field: ${key}`);
+    }
+    if (key === "name") {
+      patch.name = requireString(value, "name", 1, 200);
+      continue;
+    }
+    if (key === "description") {
+      patch.description = optionalString(value, "description", 0, 4000);
+      continue;
+    }
+    if (key === "color") {
+      patch.color = validateColor(value);
+      continue;
+    }
+    if (key === "display") {
+      patch.display = validateDisplay(value);
+    }
+  }
+  if (Object.keys(patch).length === 0) {
+    throw new ApiError(400, "EMPTY_PATCH", "At least one mutable field is required");
+  }
+  return patch;
+}
+
+function validateDefaultDuration(value) {
+  const duration = Number(value);
+  if (!Number.isInteger(duration) || !VALID_DEFAULT_DURATIONS.has(duration)) {
+    throw new ApiError(400, "INVALID_FIELD", "defaultDuration must be one of 30, 60, 90, or 120");
+  }
+  return duration;
+}
+
+function validateColor(value) {
+  if (typeof value !== "string" || !/^#[0-9a-fA-F]{6}$/.test(value.trim())) {
+    throw new ApiError(400, "INVALID_FIELD", "color must be #RRGGBB");
+  }
+  return value.trim().toUpperCase();
+}
+
+function validateDisplay(value) {
+  const display = Number(value);
+  if (!Number.isInteger(display) || ![0, 1].includes(display)) {
+    throw new ApiError(400, "INVALID_FIELD", "display must be 0 or 1");
+  }
+  return display;
+}
+
+function validateSettingsNotifications(raw) {
+  if (raw === null) {
+    return null;
+  }
+  if (!Array.isArray(raw)) {
+    throw new ApiError(400, "INVALID_NOTIFICATIONS", "notifications must be null or an array");
+  }
+  if (raw.length > 10) {
+    throw new ApiError(400, "INVALID_NOTIFICATIONS", "notifications cannot contain more than 10 entries");
+  }
+  return raw.map((notification, index) => {
+    if (!notification || typeof notification !== "object" || Array.isArray(notification)) {
+      throw new ApiError(400, "INVALID_NOTIFICATIONS", `notifications[${index}] must be an object`);
+    }
+    const type = notification.type ?? notification.Type;
+    const trigger = notification.trigger ?? notification.Trigger;
+    if (!Number.isInteger(Number(type))) {
+      throw new ApiError(400, "INVALID_NOTIFICATIONS", `notifications[${index}].type must be an integer`);
+    }
+    if (typeof trigger !== "string" || trigger.trim() === "") {
+      throw new ApiError(400, "INVALID_NOTIFICATIONS", `notifications[${index}].trigger must be a string`);
+    }
+    return { type: Number(type), trigger: trigger.trim() };
+  });
+}
+
+function normalizeUserCalendarSettings(settings) {
+  return {
+    defaultCalendarId: settings?.defaultCalendarId || null,
+    defaultDuration: settings?.defaultDuration ?? null,
+    notifications: normalizeSettingsNotifications(settings?.notifications),
+    raw: clonePlainObject(settings?.raw),
+  };
+}
+
+function normalizeCalendarSettings(settings, calendarId) {
+  return {
+    calendarId: settings?.calendarId || calendarId,
+    defaultDuration: settings?.defaultDuration ?? null,
+    notifications: normalizeSettingsNotifications(settings?.notifications),
+    raw: clonePlainObject(settings?.raw),
+  };
+}
+
+function normalizeCalendarMetadata(metadata, calendarId) {
+  return {
+    calendarId: metadata?.calendarId || calendarId,
+    name: metadata?.name || null,
+    description: metadata?.description || "",
+    color: metadata?.color || null,
+    display: metadata?.display ?? null,
+    raw: clonePlainObject(metadata?.raw),
+  };
+}
+
+function normalizeSettingsNotifications(value) {
+  if (value === undefined || value === null) {
+    return null;
+  }
+  if (!Array.isArray(value)) {
+    throw new ApiError(502, "UPSTREAM_INVALID_SETTINGS", "Upstream notifications payload is invalid");
+  }
+  return value.map((notification) => ({
+    type: Number(notification.type ?? notification.Type),
+    trigger: String(notification.trigger ?? notification.Trigger),
+  }));
+}
+
+function clonePlainObject(value) {
+  if (!value || typeof value !== "object" || Array.isArray(value)) {
+    return {};
+  }
+  return JSON.parse(JSON.stringify(value));
 }
 
 function invalidReminderError(message) {
