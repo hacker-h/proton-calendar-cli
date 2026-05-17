@@ -153,6 +153,36 @@ test("rejects unsupported components and properties", () => {
   );
 });
 
+test("rejects unsupported metadata passthrough fields by name", () => {
+  assert.throws(
+    () => parseIcsEvents([
+      "BEGIN:VCALENDAR",
+      "BEGIN:VEVENT",
+      "UID:1",
+      "SUMMARY:x",
+      "DTSTART:20260409T090000Z",
+      "DTEND:20260409T100000Z",
+      "URL:https://meet.proton.me/example",
+      "ORGANIZER:mailto:owner@example.test",
+      "ATTENDEE:mailto:person@example.test",
+      "ATTACH:https://example.test/file.pdf",
+      "CATEGORIES:work,travel",
+      "CONFERENCE;VALUE=URI:https://meet.proton.me/example",
+      "X-CUSTOM-PROP:value",
+      "END:VEVENT",
+      "END:VCALENDAR",
+      "",
+    ].join("\n")),
+    {
+      code: "ICS_UNSUPPORTED_PROPERTY",
+      details: {
+        eventIndex: 0,
+        properties: ["ATTACH", "ATTENDEE", "CATEGORIES", "CONFERENCE", "ORGANIZER", "URL", "X-CUSTOM-PROP"],
+      },
+    }
+  );
+});
+
 test("rejects impossible ICS dates before import", () => {
   assert.throws(
     () => parseIcsEvents("BEGIN:VCALENDAR\nBEGIN:VEVENT\nUID:1\nSUMMARY:x\nDTSTART:20260231T090000Z\nDTEND:20260231T100000Z\nEND:VEVENT\nEND:VCALENDAR\n"),
